@@ -34,5 +34,14 @@ coverage/
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 venv/
 .venv/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.python-version
+.claude/

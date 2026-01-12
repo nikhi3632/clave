@@ -152,7 +152,7 @@ This assessment tests **real data engineering + AI integration skills**. You'll 
 ## Time & Deadline
 
 - **Suggested effort:** 8-12 hours (but no hard limit—take the time you need to do it well)
-- **Deadline:** `January 3rd, 2026 at 11:59pm`
+- **Deadline:** `January 14th, 2026 at 11:59pm`
 - **AI Usage:** Encouraged! Use Cursor, Claude Code, and/or whatever tools help you build better.
 
 ---

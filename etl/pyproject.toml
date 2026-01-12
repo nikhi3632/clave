@@ -1,0 +1,37 @@
+[project]
+name = "clave-etl"
+version = "0.1.0"
+description = "ETL pipeline for restaurant data normalization"
+requires-python = ">=3.11"
+dependencies = [
+    "supabase>=2.0.0,<2.10.0",
+    "pydantic>=2.0.0",
+    "rapidfuzz>=3.0.0",
+    "phonetics>=1.0.5",
+    "python-dotenv>=1.0.0",
+    "anthropic>=0.18.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["main", "config", "models", "exceptions", "extract", "transform", "load", "matchers", "classifier", "validator", "review"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

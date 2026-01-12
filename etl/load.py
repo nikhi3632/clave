@@ -1,0 +1,427 @@
+"""Load transformed data into Supabase."""
+
+import logging
+import os
+import time
+from functools import wraps
+from typing import Callable, TypeVar
+
+from supabase import Client, create_client
+
+from .config import get_config
+from .exceptions import LoadError
+from .models import Order, Product
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+# =============================================================================
+# RETRY DECORATOR
+# =============================================================================
+
+
+def with_retry(
+    max_retries: int | None = None,
+    delay: float | None = None,
+    exceptions: tuple = (Exception,),
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
+    """
+    Decorator that retries a function on failure.
+
+    Args:
+        max_retries: Maximum number of retry attempts.
+        delay: Delay between retries in seconds.
+        exceptions: Tuple of exceptions to catch and retry.
+    """
+
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> T:
+            config = get_config().database
+            retries = max_retries if max_retries is not None else config.max_retries
+            retry_delay = delay if delay is not None else config.retry_delay_seconds
+
+            last_error: Exception | None = None
+
+            for attempt in range(retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    last_error = e
+                    if attempt < retries:
+                        logger.warning(
+                            f"{func.__name__} failed (attempt {attempt + 1}/{retries + 1}): {e}"
+                        )
+                        time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
+                    else:
+                        logger.error(f"{func.__name__} failed after {retries + 1} attempts: {e}")
+
+            raise last_error  # type: ignore
+
+        return wrapper
+
+    return decorator
+
+
+# =============================================================================
+# SUPABASE CLIENT
+# =============================================================================
+
+
+def get_supabase_client() -> Client:
+    """
+    Create Supabase client from environment variables.
+
+    Raises:
+        LoadError: If required environment variables are not set.
+    """
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_KEY")
+
+    if not url or not key:
+        raise LoadError(
+            "config",
+            "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in environment",
+        )
+
+    return create_client(url, key)
+
+
+# =============================================================================
+# LOADER CLASS
+# =============================================================================
+
+
+class Loader:
+    """Load data into Supabase with retry logic and batch operations."""
+
+    def __init__(self, client: Client | None = None):
+        """
+        Initialize the loader.
+
+        Args:
+            client: Optional Supabase client (for testing).
+        """
+        self.client = client or get_supabase_client()
+        self._location_cache: dict[str, str] = {}
+        self._product_cache: dict[str, str] = {}
+
+    # -------------------------------------------------------------------------
+    # READ OPERATIONS
+    # -------------------------------------------------------------------------
+
+    @with_retry()
+    def get_existing_products(self) -> list[str]:
+        """
+        Fetch existing canonical product names from database.
+
+        Returns:
+            List of canonical product names.
+        """
+        result = self.client.table("products").select("canonical_name").execute()
+        products = [row["canonical_name"] for row in result.data] if result.data else []
+        logger.debug(f"Loaded {len(products)} existing products from database")
+        return products
+
+    @with_retry()
+    def get_location_names(self) -> list[str]:
+        """
+        Fetch location names from database.
+
+        Returns:
+            List of location names.
+        """
+        result = self.client.table("locations").select("name").execute()
+        locations = [row["name"] for row in result.data] if result.data else []
+        logger.debug(f"Loaded {len(locations)} locations from database")
+        return locations
+
+    # -------------------------------------------------------------------------
+    # HELPER METHODS
+    # -------------------------------------------------------------------------
+
+    @with_retry()
+    def _get_location_id(self, name: str) -> str:
+        """
+        Get location UUID by name.
+
+        Args:
+            name: Location name to look up.
+
+        Returns:
+            Location UUID.
+
+        Raises:
+            LoadError: If location is not found.
+        """
+        if name in self._location_cache:
+            return self._location_cache[name]
+
+        result = self.client.table("locations").select("id").eq("name", name).single().execute()
+
+        if not result.data:
+            raise LoadError("locations", f"Location not found: {name}")
+
+        self._location_cache[name] = result.data["id"]
+        return result.data["id"]
+
+    @with_retry()
+    def _get_or_create_product(self, product: Product) -> str:
+        """
+        Get or create product, return UUID.
+
+        Args:
+            product: Product to find or create.
+
+        Returns:
+            Product UUID.
+        """
+        if product.canonical_name in self._product_cache:
+            return self._product_cache[product.canonical_name]
+
+        # Try to find existing
+        result = (
+            self.client.table("products")
+            .select("id")
+            .eq("canonical_name", product.canonical_name)
+            .execute()
+        )
+
+        if result.data:
+            product_id = result.data[0]["id"]
+        else:
+            # Create new
+            insert_result = (
+                self.client.table("products")
+                .insert(
+                    {
+                        "canonical_name": product.canonical_name,
+                        "category": product.category,
+                        "original_names": product.original_names,
+                    }
+                )
+                .execute()
+            )
+            product_id = insert_result.data[0]["id"]
+            logger.debug(f"Created product: {product.canonical_name}")
+
+        self._product_cache[product.canonical_name] = product_id
+        return product_id
+
+    # -------------------------------------------------------------------------
+    # BATCH OPERATIONS
+    # -------------------------------------------------------------------------
+
+    @with_retry()
+    def load_products_batch(self, products: list[Product]) -> int:
+        """
+        Load products in batch with upsert.
+
+        Args:
+            products: List of products to load.
+
+        Returns:
+            Number of products loaded.
+        """
+        if not products:
+            return 0
+
+        config = get_config().database
+        batch_size = config.batch_size
+        loaded = 0
+
+        for i in range(0, len(products), batch_size):
+            batch = products[i : i + batch_size]
+            batch_data = [
+                {
+                    "canonical_name": p.canonical_name,
+                    "category": p.category,
+                    "original_names": p.original_names,
+                }
+                for p in batch
+            ]
+
+            # Upsert to handle duplicates
+            result = (
+                self.client.table("products")
+                .upsert(batch_data, on_conflict="canonical_name")
+                .execute()
+            )
+
+            # Cache the IDs
+            for row in result.data:
+                self._product_cache[row["canonical_name"]] = row["id"]
+
+            loaded += len(batch)
+            logger.debug(f"Loaded products batch: {len(batch)}")
+
+        logger.info(f"Loaded {loaded} products in batches")
+        return loaded
+
+    def load_products(self, products: list[Product]) -> int:
+        """
+        Load products (uses batch operation internally).
+
+        Args:
+            products: List of products to load.
+
+        Returns:
+            Number of products loaded.
+        """
+        return self.load_products_batch(products)
+
+    # -------------------------------------------------------------------------
+    # ORDER OPERATIONS
+    # -------------------------------------------------------------------------
+
+    @with_retry()
+    def load_order(self, order: Order) -> str:
+        """
+        Load a single order and its items.
+
+        Args:
+            order: Order to load.
+
+        Returns:
+            Order UUID.
+
+        Raises:
+            LoadError: If order cannot be loaded.
+        """
+        try:
+            location_id = self._get_location_id(order.location.value)
+        except LoadError:
+            raise
+        except Exception as e:
+            raise LoadError("orders", f"Failed to get location: {e}")
+
+        # Insert order
+        order_data = {
+            "external_id": order.external_id,
+            "source": order.source.value,
+            "location_id": location_id,
+            "channel": order.channel.value,
+            "subtotal_cents": order.subtotal_cents,
+            "tax_cents": order.tax_cents,
+            "tip_cents": order.tip_cents,
+            "created_at": order.created_at.isoformat(),
+        }
+
+        try:
+            # Use upsert to handle duplicates
+            result = (
+                self.client.table("orders")
+                .upsert(order_data, on_conflict="source,external_id")
+                .execute()
+            )
+
+            order_id = result.data[0]["id"]
+
+            # Delete existing items (in case of re-run)
+            self.client.table("order_items").delete().eq("order_id", order_id).execute()
+
+            # Insert items
+            items_data = []
+            for item in order.items:
+                # Get product ID
+                product = Product(
+                    canonical_name=item.canonical_name or item.product_name,
+                    category=item.category,
+                    original_names=[item.product_name],
+                )
+                product_id = self._get_or_create_product(product)
+
+                items_data.append(
+                    {
+                        "order_id": order_id,
+                        "product_id": product_id,
+                        "quantity": item.quantity,
+                        "unit_price_cents": item.unit_price_cents,
+                        "modifiers": [m.model_dump() for m in item.modifiers],
+                    }
+                )
+
+            if items_data:
+                self.client.table("order_items").insert(items_data).execute()
+
+            return order_id
+
+        except Exception as e:
+            raise LoadError("orders", f"Failed to load order {order.external_id}: {e}")
+
+    @with_retry()
+    def load_orders_batch(self, orders: list[Order]) -> tuple[int, list[str]]:
+        """
+        Load orders in batch.
+
+        Args:
+            orders: List of orders to load.
+
+        Returns:
+            Tuple of (loaded_count, list of errors).
+        """
+        loaded = 0
+        errors: list[str] = []
+
+        for order in orders:
+            try:
+                self.load_order(order)
+                loaded += 1
+            except LoadError as e:
+                errors.append(str(e))
+            except Exception as e:
+                errors.append(f"Order {order.external_id}: {e}")
+
+        logger.info(f"Loaded {loaded}/{len(orders)} orders")
+        if errors:
+            logger.warning(f"Failed to load {len(errors)} orders")
+
+        return loaded, errors
+
+    # -------------------------------------------------------------------------
+    # MAINTENANCE
+    # -------------------------------------------------------------------------
+
+    @with_retry()
+    def refresh_views(self) -> None:
+        """Refresh materialized views."""
+        logger.info("Refreshing materialized views...")
+        self.client.rpc("refresh_analytics_views").execute()
+        logger.info("Materialized views refreshed")
+
+    def close(self) -> None:
+        """
+        Clean up resources and close connections.
+
+        This should be called when shutting down the ETL pipeline gracefully.
+        """
+        logger.debug("Closing loader resources...")
+
+        # Clear caches to free memory
+        self._location_cache.clear()
+        self._product_cache.clear()
+
+        # The Supabase client doesn't have an explicit close method,
+        # but we can help garbage collection by removing references
+        if hasattr(self, "client"):
+            # Close any underlying HTTP session if available
+            if hasattr(self.client, "_session") and self.client._session:
+                try:
+                    self.client._session.close()
+                except Exception as e:
+                    logger.debug(f"Error closing HTTP session: {e}")
+
+            # Clear client reference
+            self.client = None  # type: ignore
+
+        logger.debug("Loader resources closed")
+
+    def __enter__(self) -> "Loader":
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Context manager exit with cleanup."""
+        self.close()
