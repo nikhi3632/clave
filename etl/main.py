@@ -301,7 +301,7 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
 
 def main() -> None:
     """CLI entry point."""
-    project_root = Path(__file__).parent.parent.parent
+    project_root = Path(__file__).parent.parent
     load_dotenv(project_root / ".env")
 
     data_dir = project_root / "data"
