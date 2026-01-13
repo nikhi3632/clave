@@ -11,7 +11,7 @@ from matchers import CategoryMatcher, ProductMatcher, get_category_matcher, get_
 from models import Modifier, Order, OrderItem, Product, TransformResult
 
 if TYPE_CHECKING:
-    from .classifier import CategoryClassifier
+    from classifier import CategoryClassifier, ProductNameClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +81,12 @@ class Transformer:
         product_matcher: ProductMatcher | None = None,
         category_matcher: CategoryMatcher | None = None,
         category_classifier: "CategoryClassifier | None" = None,
+        product_name_classifier: "ProductNameClassifier | None" = None,
     ):
         self.product_matcher = product_matcher or get_product_matcher()
         self.category_matcher = category_matcher or get_category_matcher()
         self.category_classifier = category_classifier
+        self.product_name_classifier = product_name_classifier
 
         # Seed with existing products
         if existing_products:
@@ -92,6 +94,7 @@ class Transformer:
 
         self.products_seen: dict[str, Product] = {}
         self.cleanups: list[CleanupRecord] = []
+        self._all_original_names: set[str] = set()  # All unique original names for LLM
 
     def transform(self, raw: dict[str, Any]) -> TransformResult:
         """Transform a raw order into a validated order."""
@@ -175,7 +178,14 @@ class Transformer:
         original_name = raw.get("product_name", "")
         original_category = raw.get("category")
 
-        # Match product
+        # Collect original name for LLM normalization
+        if original_name:
+            self._all_original_names.add(original_name)
+            # Also register with ProductNameClassifier if available
+            if self.product_name_classifier:
+                self.product_name_classifier.add_product(original_name)
+
+        # Match product using fuzzy matching (will be improved by LLM later)
         match = self.product_matcher.match(original_name)
         canonical = match.matched
         confidence = match.confidence
@@ -278,3 +288,57 @@ class Transformer:
             logger.info(f"Applied normalized categories to {updated} products")
 
         return updated
+
+    def apply_llm_product_names(self) -> int:
+        """
+        Apply LLM-normalized product names.
+
+        Call this after classify_pending() has been run on the ProductNameClassifier.
+        This consolidates products with different original names that map to the same
+        canonical name (e.g., "Lg Coke" and "Large Coca-Cola" both become "Coca-Cola").
+
+        Returns:
+            Number of products consolidated.
+        """
+        if not self.product_name_classifier:
+            return 0
+
+        # Build mapping: old canonical -> new LLM canonical
+        # and consolidate products
+        new_products: dict[str, Product] = {}
+        consolidated = 0
+
+        for old_canonical, product in self.products_seen.items():
+            # Get LLM canonical name for this product's original names
+            # Use the first original name to get the canonical
+            llm_canonical = old_canonical
+            for orig_name in product.original_names:
+                llm_name = self.product_name_classifier.get_canonical_name(orig_name)
+                if llm_name and llm_name != orig_name:
+                    llm_canonical = llm_name
+                    break
+
+            if llm_canonical in new_products:
+                # Merge into existing product
+                existing = new_products[llm_canonical]
+                for orig in product.original_names:
+                    if orig not in existing.original_names:
+                        existing.original_names.append(orig)
+                # Keep the category if the existing one is None
+                if existing.category is None and product.category:
+                    existing.category = product.category
+                consolidated += 1
+            else:
+                # Update canonical name and add
+                product.canonical_name = llm_canonical
+                new_products[llm_canonical] = product
+
+        self.products_seen = new_products
+
+        if consolidated:
+            logger.info(
+                f"Consolidated {consolidated} products using LLM normalization "
+                f"(now {len(new_products)} unique products)"
+            )
+
+        return consolidated

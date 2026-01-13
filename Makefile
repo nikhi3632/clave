@@ -56,16 +56,16 @@ lint:
 	@docker run --rm -v $(PWD)/app:/app -w /app node:20-slim sh -c "npm ci --silent && npm run lint"
 	@echo "Linting api + etl (ruff)..."
 	@docker run --rm -v $(PWD):/src -w /src ghcr.io/astral-sh/ruff:latest check api/ etl/
-	@echo "✅ All lint checks passed"
+	@echo "All lint checks passed"
 
 lint-fix:
 	@echo "Fixing app (ESLint)..."
 	@docker run --rm -v $(PWD)/app:/app -w /app node:20-slim sh -c "npm ci --silent && npm run lint -- --fix"
 	@echo "Fixing api + etl (ruff)..."
 	@docker run --rm -v $(PWD):/src -w /src ghcr.io/astral-sh/ruff:latest check api/ etl/ --fix
-	@echo "✅ Auto-fix complete"
+	@echo "Auto-fix complete"
 
 typecheck:
 	@echo "Type checking app (TypeScript)..."
 	@docker run --rm -v $(PWD)/app:/app -w /app node:20-slim sh -c "npm ci --silent && npm run typecheck"
-	@echo "✅ Type check passed"
+	@echo "Type check passed"

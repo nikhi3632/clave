@@ -11,7 +11,7 @@ from types import FrameType
 
 from dotenv import load_dotenv
 
-from classifier import CategoryClassifier
+from classifier import CategoryClassifier, ProductNameClassifier
 from config import ETLConfig, setup_logging
 from exceptions import ETLError, ExtractionError, LoadError
 from extract import (
@@ -187,15 +187,28 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
             existing_products = []
 
         # Initialize category classifier
-        classifier = None
+        category_classifier = None
         try:
-            classifier = CategoryClassifier(loader.client)
-            classifier.load_cache()
+            category_classifier = CategoryClassifier(loader.client)
+            category_classifier.load_cache()
         except Exception as e:
             logger.warning(f"Could not initialize category classifier: {e}")
             logger.warning("Continuing without LLM category classification")
 
-        transformer = Transformer(existing_products, category_classifier=classifier)
+        # Initialize product name classifier
+        product_name_classifier = None
+        try:
+            product_name_classifier = ProductNameClassifier(loader.client)
+            product_name_classifier.load_cache()
+        except Exception as e:
+            logger.warning(f"Could not initialize product name classifier: {e}")
+            logger.warning("Continuing without LLM product name normalization")
+
+        transformer = Transformer(
+            existing_products,
+            category_classifier=category_classifier,
+            product_name_classifier=product_name_classifier,
+        )
 
         # Source configs
         sources = [
@@ -251,14 +264,23 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
                 f"  {source_name}: extracted={source_extracted}, transformed={source_transformed}"
             )
 
-        # Run LLM category classification and apply normalized categories
-        if not shutdown.should_stop and classifier:
+        # Run LLM product name normalization
+        if not shutdown.should_stop and product_name_classifier:
             try:
-                classifier.classify_pending()
-                transformer.apply_llm_categories()
-                classifier.save_cache()
+                product_name_classifier.classify_pending()
+                transformer.apply_llm_product_names()
+                product_name_classifier.save_cache()
             except Exception as e:
-                logger.warning(f"LLM classification failed: {e}")
+                logger.warning(f"LLM product name normalization failed: {e}")
+
+        # Run LLM category classification and apply normalized categories
+        if not shutdown.should_stop and category_classifier:
+            try:
+                category_classifier.classify_pending()
+                transformer.apply_llm_categories()
+                category_classifier.save_cache()
+            except Exception as e:
+                logger.warning(f"LLM category classification failed: {e}")
 
         # Load products first (if not interrupted)
         if not shutdown.should_stop:

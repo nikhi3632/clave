@@ -466,3 +466,285 @@ Example:
         if name_lower in self._cache:
             return self._cache[name_lower].category
         return self._pending_classifications.get(product_name) or None
+
+
+# =============================================================================
+# PRODUCT NAME CLASSIFIER
+# =============================================================================
+
+
+@dataclass
+class ProductNameResult:
+    """Result of product name normalization."""
+
+    canonical_name: str
+    confidence: str  # 'exact', 'llm', 'llm_auto', 'reviewed', 'manual'
+    score: float = 1.0
+    reason: str = ""
+
+
+@dataclass
+class ProductNameStats:
+    """Statistics about product name normalization."""
+
+    total: int = 0
+    from_cache: int = 0
+    llm_normalized: int = 0
+
+
+class ProductNameClassifier:
+    """Normalize product names using LLM with caching.
+
+    Maps variant names to canonical forms:
+    - "Lg Coke" → "Coca-Cola"
+    - "Griled Chiken" → "Grilled Chicken"
+    - "fountain soda" → "Coca-Cola"
+    - "Churros 12pcs" → "Churros"
+    """
+
+    def __init__(self, supabase_client: Client):
+        """Initialize the classifier."""
+        self.client = supabase_client
+        self._cache: dict[str, ProductNameResult] = {}  # lowercase original → result
+        self._pending: set[str] = set()  # Original names needing classification
+        self.stats = ProductNameStats()
+
+        # Initialize Anthropic client
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ETLError("ANTHROPIC_API_KEY must be set for product name classification")
+
+        self.anthropic = Anthropic(api_key=api_key)
+        self.model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
+
+    def load_cache(self) -> int:
+        """Load existing mappings from database."""
+        try:
+            result = self.client.table("product_name_cache").select("*").execute()
+
+            for row in result.data or []:
+                self._cache[row["original_name"].lower()] = ProductNameResult(
+                    canonical_name=row["canonical_name"],
+                    confidence=row["confidence"],
+                    score=row.get("score", 1.0),
+                    reason=row.get("reason", ""),
+                )
+
+            logger.info(f"Loaded {len(self._cache)} cached product name mappings")
+            return len(self._cache)
+
+        except Exception as e:
+            logger.warning(f"Could not load product name cache: {e}")
+            return 0
+
+    def add_product(self, original_name: str) -> str | None:
+        """
+        Add a product name for normalization.
+
+        Args:
+            original_name: Original product name from source.
+
+        Returns:
+            Canonical name if found in cache, None if needs LLM classification.
+        """
+        if not original_name or not original_name.strip():
+            return None
+
+        original_name = original_name.strip()
+        name_lower = original_name.lower()
+        self.stats.total += 1
+
+        # Check cache first
+        if name_lower in self._cache:
+            self.stats.from_cache += 1
+            return self._cache[name_lower].canonical_name
+
+        # Queue for LLM classification
+        self._pending.add(original_name)
+        return None
+
+    def classify_pending(self, batch_size: int = 30) -> int:
+        """
+        Normalize all pending product names using LLM.
+
+        Args:
+            batch_size: Number of products to process per LLM call.
+
+        Returns:
+            Number of products normalized.
+        """
+        if not self._pending:
+            logger.debug("No product names need LLM normalization")
+            return 0
+
+        pending_list = list(self._pending)
+        logger.info(f"Normalizing {len(pending_list)} product names with LLM...")
+
+        classified = 0
+
+        for i in range(0, len(pending_list), batch_size):
+            batch = pending_list[i : i + batch_size]
+
+            try:
+                results = self._normalize_batch(batch)
+
+                for original, result in results.items():
+                    name_lower = original.lower()
+                    self._cache[name_lower] = result
+                    self._pending.discard(original)
+                    classified += 1
+                    self.stats.llm_normalized += 1
+
+            except Exception as e:
+                logger.error(f"LLM product normalization failed for batch: {e}")
+                # Continue with next batch
+
+        logger.info(
+            f"Normalized {classified} product names "
+            f"(cache: {self.stats.from_cache}, llm: {self.stats.llm_normalized})"
+        )
+        return classified
+
+    def _normalize_batch(self, products: list[str]) -> dict[str, ProductNameResult]:
+        """
+        Normalize a batch of product names using Claude.
+
+        Args:
+            products: List of original product names.
+
+        Returns:
+            Dict mapping original names to ProductNameResult.
+        """
+        prompt = f"""You are normalizing restaurant product names from multiple POS systems.
+
+Given these product names, map each to a canonical (standard) product name.
+
+RULES:
+1. Fix typos: "Griled Chiken" → "Grilled Chicken"
+2. Expand abbreviations: "Lg Coke" → "Coca-Cola", "Sm Fries" → "French Fries"
+3. Recognize equivalents: "fountain soda", "Coke", "Coca-Cola" → "Coca-Cola"
+4. Strip sizes/quantities from canonical name: "Churros 12pcs" → "Churros"
+5. Normalize case: "NACHOS SUPREME" → "Nachos Supreme"
+6. Keep canonical names clean and consistent
+
+Product names to normalize:
+{json.dumps(products, indent=2)}
+
+Respond with a JSON object mapping each original name to its normalized form:
+{{
+  "original_name": {{
+    "canonical": "Canonical Name",
+    "confidence": 0.95,
+    "reason": "brief explanation"
+  }}
+}}
+
+Example:
+{{
+  "Lg Coke": {{"canonical": "Coca-Cola", "confidence": 0.95, "reason": "Lg=Large"}},
+  "Griled Chiken": {{"canonical": "Grilled Chicken", "confidence": 1.0, "reason": "Typo"}},
+  "fountain soda": {{"canonical": "Coca-Cola", "confidence": 0.8, "reason": "Generic soda"}},
+  "Churros 12pcs": {{"canonical": "Churros", "confidence": 1.0, "reason": "Stripped qty"}}
+}}"""
+
+        response = self.anthropic.messages.create(
+            model=self.model,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        content = response.content[0].text.strip()
+
+        # Handle markdown code blocks
+        if content.startswith("```"):
+            lines = content.split("\n")
+            content = "\n".join(lines[1:-1])
+
+        try:
+            result = json.loads(content)
+            validated: dict[str, ProductNameResult] = {}
+
+            for original, data in result.items():
+                if isinstance(data, dict):
+                    canonical = data.get("canonical", original)
+                    confidence = float(data.get("confidence", 0.8))
+                    reason = data.get("reason", "")
+                else:
+                    # Simple format fallback
+                    canonical = str(data)
+                    confidence = 0.8
+                    reason = ""
+
+                # Clean up canonical name
+                canonical = canonical.strip()
+                if not canonical:
+                    canonical = original
+
+                validated[original] = ProductNameResult(
+                    canonical_name=canonical,
+                    confidence="llm",
+                    score=confidence,
+                    reason=reason,
+                )
+
+            return validated
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse LLM response: {e}")
+            logger.debug(f"Response was: {content}")
+            return {}
+
+    def get_canonical_name(self, original_name: str) -> str:
+        """
+        Get the canonical name for a product.
+
+        Args:
+            original_name: Original product name.
+
+        Returns:
+            Canonical name (or original if not found).
+        """
+        if not original_name:
+            return original_name
+
+        name_lower = original_name.lower()
+        if name_lower in self._cache:
+            return self._cache[name_lower].canonical_name
+
+        # Not in cache, return original
+        return original_name
+
+    def save_cache(self) -> int:
+        """Save new mappings to database."""
+        to_save = []
+
+        for original_lower, result in self._cache.items():
+            # Find original casing from pending or use lowercase
+            original = original_lower
+            for pending in self._pending:
+                if pending.lower() == original_lower:
+                    original = pending
+                    break
+
+            to_save.append({
+                "original_name": original,
+                "canonical_name": result.canonical_name,
+                "confidence": result.confidence,
+                "score": result.score,
+                "reason": result.reason,
+            })
+
+        if not to_save:
+            return 0
+
+        try:
+            self.client.table("product_name_cache").upsert(
+                to_save, on_conflict="original_name"
+            ).execute()
+
+            logger.info(f"Saved {len(to_save)} product name mappings to cache")
+            return len(to_save)
+
+        except Exception as e:
+            logger.error(f"Failed to save product name cache: {e}")
+            return 0
