@@ -6,11 +6,42 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from .exceptions import ExtractionError
-from .matchers import get_channel_matcher, get_location_matcher
-from .models import Source
+from exceptions import ExtractionError
+from matchers import get_channel_matcher, get_location_matcher
+from models import Source
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# PAYMENT TYPE NORMALIZATION
+# =============================================================================
+
+def normalize_payment_type(raw_type: str | None) -> str | None:
+    """
+    Normalize payment type across different POS sources.
+
+    Standardizes to: CARD, CASH, WALLET, OTHER
+    """
+    if not raw_type:
+        return None
+
+    upper = raw_type.upper()
+
+    # Card payments (credit/debit)
+    if upper in ("CREDIT", "CARD", "DEBIT", "CREDIT_CARD", "DEBIT_CARD"):
+        return "CARD"
+
+    # Cash
+    if upper == "CASH":
+        return "CASH"
+
+    # Digital wallets
+    if upper in ("APPLE_PAY", "GOOGLE_PAY", "WALLET", "SAMSUNG_PAY", "PAYPAL"):
+        return "WALLET"
+
+    # Everything else
+    return "OTHER"
 
 
 # =============================================================================
@@ -93,6 +124,8 @@ def extract_toast(data_path: Path) -> Iterator[dict[str, Any]]:
                         "quantity": quantity,
                         "unit_price_cents": unit_price,
                         "modifiers": modifiers,
+                        "original_name": selection.get("displayName"),
+                        "special_instructions": None,  # Toast doesn't have this at item level
                     }
                 )
 
@@ -101,7 +134,44 @@ def extract_toast(data_path: Path) -> Iterator[dict[str, Any]]:
 
         subtotal = sum(c.get("amount", 0) for c in order.get("checks", []))
         tax = sum(c.get("taxAmount", 0) for c in order.get("checks", []))
-        tip = sum(c.get("totalTipAmount", 0) for c in order.get("checks", []))
+        tip = sum(c.get("tipAmount", 0) for c in order.get("checks", []))
+
+        # Extract payment info from first check's first payment
+        payment_type = None
+        card_type = None
+        processing_fee_cents = 0
+        refund_status = None
+        check_number = None
+        checks = order.get("checks", [])
+        if checks:
+            check_number = checks[0].get("displayNumber")
+            payments = checks[0].get("payments", [])
+            if payments:
+                payment = payments[0]
+                payment_type = normalize_payment_type(payment.get("type"))
+                card_type = payment.get("cardType")  # VISA, MASTERCARD, etc.
+                processing_fee_cents = payment.get("originalProcessingFee", 0)
+                refund_status = payment.get("refundStatus")  # NONE, PARTIAL, FULL
+
+        # Extract server info
+        server = order.get("server", {})
+        server_name = None
+        if server:
+            first = server.get("firstName", "")
+            last = server.get("lastName", "")
+            server_name = f"{first} {last}".strip() or None
+
+        # Extract revenue center
+        revenue_center = order.get("revenueCenter", {}).get("name")
+
+        # Parse closed_at timestamp
+        closed_at = None
+        closed_str = order.get("closedDate")
+        if closed_str:
+            try:
+                closed_at = datetime.fromisoformat(closed_str.replace("Z", "+00:00"))
+            except ValueError:
+                pass
 
         yield {
             "external_id": order.get("guid", ""),
@@ -113,6 +183,31 @@ def extract_toast(data_path: Path) -> Iterator[dict[str, Any]]:
             "tip_cents": tip,
             "created_at": created_at,
             "items": items,
+            "order_status": "COMPLETED" if not order.get("voided") else "VOIDED",
+            "pickup_time": None,
+            "delivery_time": None,
+            "closed_at": closed_at,
+            "is_catering": False,
+            "contains_alcohol": False,
+            "voided": order.get("voided", False),
+            "deleted": order.get("deleted", False),
+            "refund_status": refund_status,
+            "payment_type": payment_type,
+            "card_type": card_type,
+            "revenue_center": revenue_center,
+            "server_name": server_name,
+            "check_number": check_number,
+            "order_source": order.get("source"),  # POS, ONLINE, THIRD_PARTY
+            "business_date": order.get("businessDate"),
+            "delivery_fee_cents": 0,
+            "service_fee_cents": 0,
+            "commission_cents": 0,
+            "merchant_payout_cents": 0,
+            "processing_fee_cents": processing_fee_cents,
+            "delivery_street": None,
+            "delivery_city": None,
+            "delivery_state": None,
+            "delivery_zip": None,
             "_location_input": location_name,
             "_location_method": loc_method,
             "_channel_input": channel_str,
@@ -190,11 +285,32 @@ def extract_doordash(data_path: Path) -> Iterator[dict[str, Any]]:
                     "quantity": item.get("quantity", 1),
                     "unit_price_cents": item.get("unit_price", 0),
                     "modifiers": modifiers,
+                    "original_name": item.get("name"),
+                    "special_instructions": item.get("special_instructions") or None,
                 }
             )
 
         if not items:
             continue
+
+        # Parse pickup and delivery times
+        pickup_time = None
+        delivery_time = None
+        pickup_str = order.get("pickup_time")
+        delivery_str = order.get("delivery_time")
+        if pickup_str:
+            try:
+                pickup_time = datetime.fromisoformat(pickup_str.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        if delivery_str:
+            try:
+                delivery_time = datetime.fromisoformat(delivery_str.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+
+        # Extract delivery address (may be null for pickup orders)
+        dropoff = order.get("dropoff_address") or {}
 
         yield {
             "external_id": order.get("external_delivery_id", ""),
@@ -206,6 +322,35 @@ def extract_doordash(data_path: Path) -> Iterator[dict[str, Any]]:
             "tip_cents": order.get("dasher_tip", 0),
             "created_at": created_at,
             "items": items,
+            # DoorDash-specific fields
+            "order_status": order.get("order_status"),  # DELIVERED, PICKED_UP
+            "pickup_time": pickup_time,
+            "delivery_time": delivery_time,
+            "is_catering": order.get("is_catering", False),
+            "contains_alcohol": order.get("contains_alcohol", False),
+            "delivery_fee_cents": order.get("delivery_fee", 0),
+            "service_fee_cents": order.get("service_fee", 0),
+            "commission_cents": order.get("commission", 0),
+            "merchant_payout_cents": order.get("merchant_payout", 0),
+            # Delivery address
+            "delivery_street": dropoff.get("street"),
+            "delivery_city": dropoff.get("city"),
+            "delivery_state": dropoff.get("state"),
+            "delivery_zip": dropoff.get("zip_code"),
+            # Not available in DoorDash
+            "closed_at": None,
+            "voided": False,
+            "deleted": False,
+            "refund_status": None,
+            "payment_type": "UNKNOWN",  # DoorDash doesn't expose payment info
+            "card_type": None,
+            "processing_fee_cents": 0,
+            "revenue_center": None,
+            "server_name": None,
+            "check_number": None,
+            "order_source": "DOORDASH",
+            "business_date": None,
+            # Debug fields
             "_location_input": store_name,
             "_location_method": loc_method,
             "_channel_input": channel_str,
@@ -254,15 +399,45 @@ def build_square_catalog(catalog_path: Path) -> dict[str, dict]:
     return lookup
 
 
+def build_square_payments(payments_path: Path) -> dict[str, dict]:
+    """Build lookup from order_id to payment info."""
+    payments = {}
+    if not payments_path.exists():
+        return payments
+    try:
+        with open(payments_path) as f:
+            data = json.load(f)
+        for payment in data.get("payments", []):
+            order_id = payment.get("order_id")
+            if order_id:
+                source_type = payment.get("source_type", "")  # CARD, CASH, etc.
+                card_brand = None
+                if source_type == "CARD":
+                    card_brand = payment.get("card_details", {}).get("card", {}).get("card_brand")
+                payments[order_id] = {
+                    "payment_type": normalize_payment_type(source_type),
+                    "card_type": card_brand,
+                }
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Could not load Square payments: {e}")
+    return payments
+
+
 def extract_square(
     orders_path: Path,
     catalog_path: Path,
     locations_path: Path | None = None,
+    payments_path: Path | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Extract orders from Square export."""
     location_matcher = get_location_matcher()
     channel_matcher = get_channel_matcher()
     catalog = build_square_catalog(catalog_path)
+
+    # Build payment lookup
+    payments_lookup = {}
+    if payments_path:
+        payments_lookup = build_square_payments(payments_path)
 
     # Build location lookup
     location_names = {}
@@ -336,6 +511,8 @@ def extract_square(
                     "quantity": quantity,
                     "unit_price_cents": total // quantity if quantity > 0 else total,
                     "modifiers": modifiers,
+                    "original_name": item_name,
+                    "special_instructions": line.get("note"),
                 }
             )
 
@@ -346,8 +523,25 @@ def extract_square(
         tax = order.get("total_tax_money", {}).get("amount", 0)
         tip = order.get("total_tip_money", {}).get("amount", 0)
 
+        # Get payment info from lookup
+        order_id = order.get("id", "")
+        payment_info = payments_lookup.get(order_id, {})
+
+        # Parse closed_at timestamp
+        closed_at = None
+        closed_str = order.get("closed_at")
+        if closed_str:
+            try:
+                closed_at = datetime.fromisoformat(closed_str.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+
+        # Determine voided status from order state
+        order_state = order.get("state", "")
+        is_voided = order_state == "CANCELED"
+
         yield {
-            "external_id": order.get("id", ""),
+            "external_id": order_id,
             "source": Source.SQUARE,
             "location": location,
             "channel": channel,
@@ -356,6 +550,32 @@ def extract_square(
             "tip_cents": tip,
             "created_at": created_at,
             "items": items,
+            "order_status": order_state,  # OPEN, COMPLETED, CANCELED
+            "pickup_time": None,
+            "delivery_time": None,
+            "closed_at": closed_at,
+            "is_catering": False,
+            "contains_alcohol": False,
+            "voided": is_voided,
+            "deleted": False,
+            "refund_status": None,
+            "payment_type": payment_info.get("payment_type"),
+            "card_type": payment_info.get("card_type"),
+            "processing_fee_cents": 0,
+            "revenue_center": None,
+            "server_name": None,
+            "check_number": None,
+            "order_source": "SQUARE",
+            "business_date": None,
+            "delivery_fee_cents": 0,
+            "service_fee_cents": order.get("total_service_charge_money", {}).get("amount", 0),
+            "commission_cents": 0,
+            "merchant_payout_cents": 0,
+            "delivery_street": None,
+            "delivery_city": None,
+            "delivery_state": None,
+            "delivery_zip": None,
+            # Debug fields
             "_location_input": location_name,
             "_location_method": loc_method,
             "_channel_input": channel_str,

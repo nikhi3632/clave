@@ -24,6 +24,12 @@ export function PieChartView({
   const colors = getChartColors(isDark);
   const formatValue = createFormatter(valueFormat);
 
+  // Filter out null/undefined values from pie chart data
+  const filteredData = data.filter((item) => {
+    const value = item[nameKey];
+    return value !== null && value !== undefined && value !== "";
+  });
+
   // Build drill-down filters from pie segment
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleSegmentClick = (entry: any) => {
@@ -40,9 +46,10 @@ export function PieChartView({
       filters.source = nameValue;
     } else if (nameLower.includes("channel")) {
       filters.channel = nameValue;
+    } else if (nameLower.includes("payment")) {
+      filters.payment_type = nameValue;
     } else if (nameLower.includes("category")) {
-      // For categories, we can't filter directly but show category-based products
-      filters.product = nameValue;
+      filters.category = nameValue;
     } else {
       filters.product = nameValue;
     }
@@ -54,7 +61,7 @@ export function PieChartView({
     <ResponsiveContainer width="100%" height={300}>
       <PieChart>
         <Pie
-          data={data}
+          data={filteredData}
           dataKey={dataKey}
           nameKey={nameKey}
           cx="50%"
@@ -67,7 +74,7 @@ export function PieChartView({
           onClick={(entry) => handleSegmentClick(entry)}
           style={{ cursor: onDataClick ? "pointer" : "default" }}
         >
-          {data.map((_, index) => (
+          {filteredData.map((_, index) => (
             <Cell
               key={`cell-${index}`}
               fill={CHART_COLORS[index % CHART_COLORS.length]}

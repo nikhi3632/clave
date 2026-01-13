@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from anthropic import Anthropic
 from supabase import Client
 
-from .exceptions import ETLError
+from exceptions import ETLError
 
 logger = logging.getLogger(__name__)
 

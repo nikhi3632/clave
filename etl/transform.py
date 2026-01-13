@@ -6,9 +6,9 @@ import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from .exceptions import TransformationError
-from .matchers import CategoryMatcher, ProductMatcher, get_category_matcher, get_product_matcher
-from .models import Modifier, Order, OrderItem, Product, TransformResult
+from exceptions import TransformationError
+from matchers import CategoryMatcher, ProductMatcher, get_category_matcher, get_product_matcher
+from models import Modifier, Order, OrderItem, Product, TransformResult
 
 if TYPE_CHECKING:
     from .classifier import CategoryClassifier
@@ -115,9 +115,41 @@ class Transformer:
                 source=raw["source"],
                 location=raw["location"],
                 channel=raw["channel"],
+                # Financial fields
                 subtotal_cents=raw["subtotal_cents"],
                 tax_cents=raw["tax_cents"],
                 tip_cents=raw["tip_cents"],
+                delivery_fee_cents=raw.get("delivery_fee_cents", 0),
+                service_fee_cents=raw.get("service_fee_cents", 0),
+                commission_cents=raw.get("commission_cents", 0),
+                merchant_payout_cents=raw.get("merchant_payout_cents", 0),
+                processing_fee_cents=raw.get("processing_fee_cents", 0),
+                # Order status & timing
+                order_status=raw.get("order_status"),
+                pickup_time=raw.get("pickup_time"),
+                delivery_time=raw.get("delivery_time"),
+                closed_at=raw.get("closed_at"),
+                # Order flags
+                is_catering=raw.get("is_catering", False),
+                contains_alcohol=raw.get("contains_alcohol", False),
+                voided=raw.get("voided", False),
+                deleted=raw.get("deleted", False),
+                refund_status=raw.get("refund_status"),
+                # Payment info
+                payment_type=raw.get("payment_type"),
+                card_type=raw.get("card_type"),
+                # Toast-specific
+                revenue_center=raw.get("revenue_center"),
+                server_name=raw.get("server_name"),
+                check_number=raw.get("check_number"),
+                order_source=raw.get("order_source"),
+                business_date=raw.get("business_date"),
+                # Delivery address
+                delivery_street=raw.get("delivery_street"),
+                delivery_city=raw.get("delivery_city"),
+                delivery_state=raw.get("delivery_state"),
+                delivery_zip=raw.get("delivery_zip"),
+                # Timestamps
                 created_at=raw["created_at"],
                 items=items,
             )
@@ -209,6 +241,8 @@ class Transformer:
                 modifiers=modifiers,
                 match_confidence=confidence if confidence > 0 else None,
                 match_method=method if method != "new" else None,
+                original_name=raw.get("original_name"),
+                special_instructions=raw.get("special_instructions"),
             ),
             changes,
             warnings,

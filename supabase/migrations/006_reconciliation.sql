@@ -25,8 +25,6 @@ SELECT
     (SELECT COALESCE(SUM(total_cents), 0) FROM orders WHERE source = 'square') as square_revenue_cents,
     -- Data quality
     (SELECT COUNT(*) FROM products WHERE category IS NULL) as products_without_category,
-    (SELECT COUNT(*) FROM etl_anomalies WHERE severity = 'error') as error_count,
-    (SELECT COUNT(*) FROM etl_anomalies WHERE severity = 'warning') as warning_count,
     -- Last updated
     NOW() as refreshed_at;
 

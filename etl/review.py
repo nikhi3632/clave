@@ -161,8 +161,11 @@ def show_stats(client) -> None:
 
 def main():
     """CLI entry point."""
-    project_root = Path(__file__).parent.parent.parent
-    load_dotenv(project_root / ".env")
+    # Try to load .env if running locally (not in Docker)
+    project_root = Path(__file__).parent.parent
+    env_file = project_root / ".env"
+    if env_file.exists():
+        load_dotenv(env_file)
 
     client = get_client()
 

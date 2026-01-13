@@ -56,6 +56,8 @@ export function BarChartView({
     const date = rowData?.date;
     const source = rowData?.source;
     const channel = rowData?.channel;
+    const payment_type = rowData?.payment_type;
+    const category = rowData?.category;
 
     // Detect which filter to use based on xAxis or available data
     const xLower = xAxis.toLowerCase();
@@ -69,6 +71,10 @@ export function BarChartView({
       if (source) filters.source = String(source);
     } else if (xLower.includes("channel")) {
       if (channel) filters.channel = String(channel);
+    } else if (xLower.includes("payment")) {
+      if (payment_type) filters.payment_type = String(payment_type);
+    } else if (xLower.includes("category")) {
+      if (category) filters.category = String(category);
     } else if (product) {
       filters.product = String(product);
     }

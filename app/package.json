@@ -8,6 +8,7 @@
     "start": "next start",
     "start:custom": "NODE_ENV=production node server.mjs",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit",
     "verify": "npx tsx scripts/verify.ts"
   },
   "dependencies": {

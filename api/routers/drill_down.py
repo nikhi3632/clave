@@ -12,11 +12,13 @@ async def drill_down(
     date: str | None = Query(default=None),
     source: str | None = Query(default=None),
     channel: str | None = Query(default=None),
+    payment_type: str | None = Query(default=None),
+    category: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
 ):
     """Get detailed order data with filters."""
     # At least one filter required
-    if not any([product, location, date, source, channel]):
+    if not any([product, location, date, source, channel, payment_type, category]):
         raise HTTPException(
             status_code=400,
             detail={
@@ -38,6 +40,7 @@ async def drill_down(
                 external_id,
                 source,
                 channel,
+                payment_type,
                 total_cents,
                 created_at,
                 locations!inner ( name )
@@ -55,6 +58,10 @@ async def drill_down(
             query = query.eq("orders.source", source)
         if channel:
             query = query.eq("orders.channel", channel)
+        if payment_type:
+            query = query.eq("orders.payment_type", payment_type)
+        if category:
+            query = query.eq("products.category", category)
 
         result = query.execute()
 
@@ -69,6 +76,7 @@ async def drill_down(
                 "order_id": order_data.get("external_id") if order_data else None,
                 "source": order_data.get("source") if order_data else None,
                 "channel": order_data.get("channel") if order_data else None,
+                "payment_type": order_data.get("payment_type") if order_data else None,
                 "location": location_data.get("name") if location_data else None,
                 "product": product_data.get("canonical_name") if product_data else None,
                 "category": product_data.get("category") if product_data else None,
@@ -91,6 +99,8 @@ async def drill_down(
                 "date": date,
                 "source": source,
                 "channel": channel,
+                "payment_type": payment_type,
+                "category": category,
                 "limit": limit,
             },
             "count": len(orders),

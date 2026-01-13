@@ -52,6 +52,9 @@ class OrderItem(BaseModel):
     modifiers: list[Modifier] = Field(default_factory=list)
     match_confidence: float | None = None
     match_method: str | None = None
+    # Additional item details
+    original_name: str | None = None  # Name before normalization
+    special_instructions: str | None = None  # Customer notes
 
     @property
     def total_cents(self) -> int:
@@ -65,9 +68,42 @@ class Order(BaseModel):
     source: Source
     location: Location
     channel: Channel
+    # Financial fields
     subtotal_cents: int = Field(ge=0)
     tax_cents: int = Field(ge=0, default=0)
     tip_cents: int = Field(ge=0, default=0)
+    # Delivery platform fees (DoorDash)
+    delivery_fee_cents: int = Field(ge=0, default=0)
+    service_fee_cents: int = Field(ge=0, default=0)
+    commission_cents: int = Field(ge=0, default=0)
+    merchant_payout_cents: int = Field(ge=0, default=0)
+    processing_fee_cents: int = Field(ge=0, default=0)
+    # Order status & timing
+    order_status: str | None = None
+    pickup_time: datetime | None = None
+    delivery_time: datetime | None = None
+    closed_at: datetime | None = None
+    # Order flags
+    is_catering: bool = False
+    contains_alcohol: bool = False
+    voided: bool = False
+    deleted: bool = False
+    refund_status: str | None = None
+    # Payment info
+    payment_type: str | None = None
+    card_type: str | None = None
+    # Toast-specific
+    revenue_center: str | None = None
+    server_name: str | None = None
+    check_number: str | None = None
+    order_source: str | None = None
+    business_date: str | None = None
+    # Delivery address (for delivery orders)
+    delivery_street: str | None = None
+    delivery_city: str | None = None
+    delivery_state: str | None = None
+    delivery_zip: str | None = None
+    # Timestamps
     created_at: datetime
     items: list[OrderItem] = Field(min_length=1)
 

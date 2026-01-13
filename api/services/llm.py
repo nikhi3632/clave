@@ -9,7 +9,7 @@ import anthropic
 
 from config import get_settings
 
-from .database import get_data_date_range
+from .database import SchemaInfo, get_schema_info
 
 
 class LLMError(Exception):
@@ -48,106 +48,98 @@ DANGEROUS_SQL_PATTERNS = [
 ]
 
 
-SCHEMA_CONTEXT = """
-You are an analytics assistant for a restaurant chain with 4 locations: Downtown, Airport, Mall, University.
-Data covers January 1-4, 2025 from 3 POS sources: toast, doordash, square.
+def _simplify_pg_type(pg_type: str) -> str:
+    """Convert PostgreSQL type to simplified type name."""
+    pg_type = pg_type.lower()
+    if "int" in pg_type or pg_type == "bigint" or pg_type == "smallint":
+        return "INTEGER"
+    if pg_type in ("text", "character varying", "varchar", "char"):
+        return "TEXT"
+    if pg_type == "uuid":
+        return "UUID"
+    if pg_type == "boolean":
+        return "BOOLEAN"
+    if pg_type == "date":
+        return "DATE"
+    if "timestamp" in pg_type:
+        return "TIMESTAMPTZ"
+    if pg_type in ("numeric", "decimal", "real", "double precision"):
+        return "NUMERIC"
+    return pg_type.upper()
+
+
+def _format_table_schema(name: str, columns: list[dict[str, str]], comments: dict[str, str]) -> str:
+    """Format a table's columns as markdown with comments."""
+    lines = [f"**{name}**"]
+    for col in columns:
+        col_type = _simplify_pg_type(col["type"])
+        comment_key = f"{name}.{col['column']}"
+        comment = comments.get(comment_key, "")
+        if comment:
+            lines.append(f"- {col['column']}: {col_type} — {comment}")
+        else:
+            lines.append(f"- {col['column']}: {col_type}")
+    return "\n".join(lines)
+
+
+def _format_view_schema(name: str, columns: list[dict[str, str]], view_comments: dict[str, str]) -> str:
+    """Format a view's columns as markdown with view-level comment."""
+    comment = view_comments.get(name, "")
+    header = f"**{name}**" + (f" — {comment}" if comment else "")
+    col_lines = [f"- {c['column']}: {_simplify_pg_type(c['type'])}" for c in columns]
+    return header + "\n" + "\n".join(col_lines)
+
+
+def build_schema_context(schema: SchemaInfo) -> str:
+    """Build dynamic schema context from database introspection."""
+    locations_str = ", ".join(schema.locations) if schema.locations else "No locations"
+    sources_str = ", ".join(schema.sources) if schema.sources else "No sources"
+    channels_str = ", ".join(schema.channels) if schema.channels else "No channels"
+    categories_str = ", ".join(schema.categories) if schema.categories else "No categories"
+    payment_types_str = ", ".join(schema.payment_types) if schema.payment_types else "No payment types"
+
+    # Format tables with comments
+    tables_md = "\n\n".join(
+        _format_table_schema(name, cols, schema.column_comments)
+        for name, cols in sorted(schema.tables.items())
+    )
+
+    # Format views with comments
+    views_md = "\n\n".join(
+        _format_view_schema(name, cols, schema.view_comments)
+        for name, cols in sorted(schema.views.items())
+    )
+
+    return f"""You are an analytics assistant for a restaurant chain.
+Locations: {locations_str}
+Data range: {schema.date_range.formatted}
+POS sources: {sources_str}
 
 ## Database Schema
 
 ### Tables
+Column comments contain synonyms and business rules - follow them.
 
-**locations**
-- id: UUID
-- name: TEXT (Downtown, Airport, Mall, University)
-
-**products**
-- id: UUID
-- canonical_name: TEXT (normalized product name)
-- category: TEXT (Appetizers, Breakfast, Desserts, Drinks, Entrees, Sides)
-
-**orders**
-- id: UUID
-- external_id: TEXT
-- source: TEXT (toast, doordash, square)
-- location_id: UUID (FK to locations)
-- channel: TEXT (dine_in, pickup, delivery)
-- subtotal_cents: INTEGER
-- tax_cents: INTEGER
-- tip_cents: INTEGER
-- total_cents: INTEGER (computed: subtotal + tax + tip)
-- created_at: TIMESTAMPTZ
-
-**order_items**
-- id: UUID
-- order_id: UUID (FK to orders)
-- product_id: UUID (FK to products)
-- quantity: INTEGER
-- unit_price_cents: INTEGER
-- total_cents: INTEGER (computed: quantity * unit_price)
+{tables_md}
 
 ### Materialized Views (USE THESE FOR FASTER QUERIES)
 
-**daily_sales** - Daily aggregates by location/channel/source
-- location: TEXT
-- date: DATE
-- channel: TEXT
-- source: TEXT
-- order_count: INTEGER
-- revenue_cents: INTEGER
-- avg_order_cents: INTEGER
+{views_md}
 
-**hourly_sales** - Hourly patterns by location
-- location: TEXT
-- date: DATE
-- hour: INTEGER (0-23)
-- day_name: TEXT (Monday, Tuesday, etc.)
-- day_of_week: INTEGER (0=Sunday, 6=Saturday)
-- order_count: INTEGER
-- revenue_cents: INTEGER
-
-**product_performance** - Product sales by location/channel
-- product: TEXT
-- category: TEXT
-- location: TEXT
-- channel: TEXT
-- order_count: INTEGER
-- units_sold: INTEGER
-- revenue_cents: INTEGER
-
-**channel_breakdown** - Channel comparison by location
-- location: TEXT
-- channel: TEXT
-- source: TEXT
-- order_count: INTEGER
-- revenue_cents: INTEGER
-- avg_order_cents: INTEGER
-- total_tips_cents: INTEGER
-
-## Important Notes
-- All monetary values are in CENTS (divide by 100 for dollars)
-- Use materialized views when possible - they're pre-aggregated
-- Channel values: dine_in, pickup, delivery
-  - "takeout" or "to-go" → use channel = 'pickup'
-  - "in-store" or "eat-in" → use channel = 'dine_in'
-- Source values: toast, doordash, square
-- Category values: Appetizers, Breakfast, Desserts, Drinks, Entrees, Sides
-  - "beverages" or "drinks" → use category = 'Drinks'
-  - "main courses" or "mains" → use category = 'Entrees'
-- Location values: Downtown, Airport, Mall, University
+## Dynamic Values (from actual data)
+- Locations: {locations_str}
+- Sources: {sources_str}
+- Channels: {channels_str}
+- Categories: {categories_str}
+- Payment types: {payment_types_str}
 
 ## Date Handling (CRITICAL)
-- The AVAILABLE DATA RANGE will be provided in each query context (dynamically fetched from database)
+- The AVAILABLE DATA RANGE will be provided in each query context
 - The CURRENT DATE will also be provided in each query context
-- Use these to determine if a user's date query can be answered
 
 ### When user asks about dates:
 1. **Date IN the available range** → Generate normal SQL query
-2. **Date OUTSIDE the available range** → Return an info response (see below)
-
-### Relative date keywords to detect:
-- "yesterday", "today", "last week", "this week", "this month"
-- "recent", "latest", "past X days"
-- Any specific date outside the available data range
+2. **Date OUTSIDE the available range** → Return an info response
 
 ### If date is outside the available range, respond with:
 - sql: "SELECT 1 as placeholder WHERE false"
@@ -156,51 +148,41 @@ Data covers January 1-4, 2025 from 3 POS sources: toast, doordash, square.
 - summary: MUST include the actual available dates and helpful suggestions.
 """
 
-CHART_SELECTION_RULES = """
-## Chart Type Selection Rules
+CHART_SELECTION_GUIDELINES = """
+## Chart Type Selection Guidelines
 
-Choose the chart type based on the DATA SHAPE and QUERY INTENT:
+Choose the visualization based on the DATA SEMANTICS and what would best communicate the insight:
 
-### BAR CHART - Use when:
-- Comparing discrete categories (locations, products, channels)
-- Showing rankings or top N items
-- Keywords: "by", "per", "compare", "top", "best", "worst", "ranking"
+### METRIC - Single aggregate value
+- Use when the result is ONE number (total revenue, count of orders, average value)
+- Result shape: 1 row, 1-2 columns
 
-### LINE CHART - Use when:
-- Showing change over TIME (hours, days, weeks)
-- Displaying trends or patterns
-- Keywords: "trend", "over time", "pattern", "hourly", "daily", "weekly", "growth"
+### LINE - Time series data
+- Use when showing how values change over time (hourly, daily, weekly patterns)
+- Result shape: multiple rows with a time/date column
 
-### PIE CHART - Use when:
-- Showing parts of a whole (percentages, proportions)
-- Keywords: "percentage", "proportion", "share", "breakdown", "distribution", "split"
+### BAR - Categorical comparisons
+- Use when comparing values across discrete categories (locations, products, channels)
+- Result shape: multiple rows with a category column and value column
 
-### TABLE - Use when:
-- User wants detailed/raw data
-- Multiple columns of mixed data types
-- Keywords: "list", "show all", "details", "breakdown by multiple dimensions"
+### PIE - Part-of-whole relationships
+- Use when showing how parts contribute to a total (percentage breakdowns)
+- Best for 2-7 categories; avoid for many categories
+- Result shape: multiple rows with category and percentage/count
 
-### METRIC (single number) - Use when:
-- Query asks for ONE specific value
-- Keywords: "total", "how much", "how many", "what is the", "count of"
+### TABLE - Detailed data
+- Use when showing multi-dimensional data or raw records
+- Result shape: multiple rows and columns with mixed data types
 
-## Decision Priority
-1. If asking for a single number → metric
-2. If time-based (hour/day/date in result) → line
-3. If asking about percentages/proportions → pie
-4. If asking for detailed list → table
-5. Otherwise (comparing categories) → bar
+Use your judgment for ambiguous cases. The system will validate your choice against the actual result shape.
 """
 
-SYSTEM_PROMPT = f"""{SCHEMA_CONTEXT}
-
-{CHART_SELECTION_RULES}
-
+TASK_PROMPT = """
 ## Your Task
 
 Given a user's natural language query about restaurant analytics, return a JSON object with:
 1. sql: A valid PostgreSQL SELECT query using the schema above
-2. chartType: One of "bar", "line", "pie", "table", "metric" (follow the Chart Selection Rules above)
+2. chartType: One of "bar", "line", "pie", "table", "metric" (follow the Chart Selection Guidelines above)
 3. title: A short title for the visualization
 4. xAxis: Column name for x-axis (bar/line charts)
 5. yAxis: Column name for y-axis (bar/line charts)
@@ -224,6 +206,12 @@ If the user's query is NOT about restaurant analytics (greetings, off-topic ques
 - Set summary to a helpful message explaining what queries are supported, with 2-3 examples
 
 Return ONLY valid JSON, no markdown code blocks or explanation."""
+
+
+def build_system_prompt(schema: SchemaInfo) -> str:
+    """Build complete system prompt with dynamic schema."""
+    schema_context = build_schema_context(schema)
+    return f"{schema_context}\n{CHART_SELECTION_GUIDELINES}\n{TASK_PROMPT}"
 
 
 MAX_RETRIES = 3
@@ -308,18 +296,19 @@ async def _call_llm_with_retry(user_query: str, retry_count: int = 0) -> str:
 
     try:
         current_date = _get_current_date_context()
-        date_range = await get_data_date_range()
+        schema = await get_schema_info()
+        system_prompt = build_system_prompt(schema)
 
         response = client.messages.create(
             model=settings.llm_model,
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[
                 {
                     "role": "user",
                     "content": f"""Context:
 - Current date: {current_date}
-- Available data range: {date_range.formatted} ({date_range.min_date} to {date_range.max_date})
+- Available data range: {schema.date_range.formatted} ({schema.date_range.min_date} to {schema.date_range.max_date})
 
 User query: "{user_query}"
 
@@ -351,6 +340,87 @@ Return the JSON object with sql, chartType, title, xAxis/yAxis or dataKey/nameKe
 
     except anthropic.AuthenticationError:
         raise LLMError("AI service authentication failed", "AUTH_ERROR", False)
+
+
+def validate_chart_type(data: list[dict], result: LLMResult) -> LLMResult:
+    """
+    Validate and potentially correct chart type based on actual result shape.
+
+    This provides guardrails against LLM chart selection mistakes.
+    """
+    if not data or result.chart_type == "info":
+        return result
+
+    num_rows = len(data)
+    num_cols = len(data[0]) if data else 0
+    columns = list(data[0].keys()) if data else []
+    columns_lower = [c.lower() for c in columns]
+
+    # Check for time-related columns
+    time_columns = {"date", "day", "hour", "day_name", "week", "month", "created_at"}
+    has_time_column = any(col in time_columns for col in columns_lower)
+
+    # Single value → metric
+    if num_rows == 1 and num_cols <= 2:
+        if result.chart_type not in ["metric", "table"]:
+            return LLMResult(
+                sql=result.sql,
+                chart_type="metric",
+                title=result.title,
+                x_axis=None,
+                y_axis=None,
+                data_key=columns[0] if columns else None,
+                name_key=None,
+                value_format=result.value_format,
+                summary=result.summary,
+            )
+
+    # Time series data → line (unless explicitly table)
+    if has_time_column and num_rows > 1 and result.chart_type not in ["line", "table"]:
+        # Find the time column and value column
+        time_col = next((c for c in columns if c.lower() in time_columns), columns[0])
+        value_col = next((c for c in columns if c.lower() not in time_columns), columns[-1])
+        return LLMResult(
+            sql=result.sql,
+            chart_type="line",
+            title=result.title,
+            x_axis=time_col,
+            y_axis=value_col,
+            data_key=None,
+            name_key=None,
+            value_format=result.value_format,
+            summary=result.summary,
+        )
+
+    # Too many categories for pie → bar
+    if result.chart_type == "pie" and num_rows > 10:
+        return LLMResult(
+            sql=result.sql,
+            chart_type="bar",
+            title=result.title,
+            x_axis=result.name_key,
+            y_axis=result.data_key,
+            data_key=None,
+            name_key=None,
+            value_format=result.value_format,
+            summary=result.summary,
+        )
+
+    # Many columns → table
+    if num_cols > 4 and result.chart_type not in ["table"]:
+        return LLMResult(
+            sql=result.sql,
+            chart_type="table",
+            title=result.title,
+            x_axis=None,
+            y_axis=None,
+            data_key=None,
+            name_key=None,
+            value_format=result.value_format,
+            summary=result.summary,
+        )
+
+    return result
 
 
 async def process_query(user_query: str) -> LLMResult:

@@ -166,3 +166,161 @@ async def get_data_date_range() -> DataDateRange:
         max_date="2025-01-04",
         formatted="January 1-4, 2025",
     )
+
+
+@dataclass
+class SchemaInfo:
+    """Dynamic schema information for LLM context."""
+
+    locations: list[str]
+    sources: list[str]
+    channels: list[str]
+    categories: list[str]
+    payment_types: list[str]
+    date_range: DataDateRange
+    tables: dict[str, list[dict[str, str]]]  # table -> [{column, type}]
+    views: dict[str, list[dict[str, str]]]  # view -> [{column, type}]
+    column_comments: dict[str, str]  # "table.column" -> comment
+    view_comments: dict[str, str]  # "view_name" -> comment
+
+
+# Cache for schema info
+_schema_cache: dict[str, tuple[SchemaInfo, float]] = {}
+SCHEMA_CACHE_TTL = 600  # 10 minutes
+
+
+async def get_schema_info() -> SchemaInfo:
+    """Get dynamic schema information from the database."""
+    cache_key = "schema"
+
+    if cache_key in _schema_cache:
+        cached, cached_at = _schema_cache[cache_key]
+        if time.time() - cached_at < SCHEMA_CACHE_TTL:
+            return cached
+
+    client = get_supabase_client()
+
+    # Get locations
+    locations_sql = "SELECT DISTINCT name FROM locations ORDER BY name"
+    locations_result = client.rpc("execute_readonly_query", {"query_text": locations_sql}).execute()
+    locations = [r["name"] for r in (locations_result.data or [])]
+
+    # Get sources
+    sources_sql = "SELECT DISTINCT source FROM orders ORDER BY source"
+    sources_result = client.rpc("execute_readonly_query", {"query_text": sources_sql}).execute()
+    sources = [r["source"] for r in (sources_result.data or [])]
+
+    # Get channels
+    channels_sql = "SELECT DISTINCT channel FROM orders ORDER BY channel"
+    channels_result = client.rpc("execute_readonly_query", {"query_text": channels_sql}).execute()
+    channels = [r["channel"] for r in (channels_result.data or [])]
+
+    # Get categories
+    categories_sql = (
+        "SELECT DISTINCT category FROM products "
+        "WHERE category IS NOT NULL ORDER BY category"
+    )
+    categories_result = client.rpc(
+        "execute_readonly_query", {"query_text": categories_sql}
+    ).execute()
+    categories = [r["category"] for r in (categories_result.data or [])]
+
+    # Get payment types
+    payment_types_sql = (
+        "SELECT DISTINCT payment_type FROM orders "
+        "WHERE payment_type IS NOT NULL ORDER BY payment_type"
+    )
+    payment_types_result = client.rpc(
+        "execute_readonly_query", {"query_text": payment_types_sql}
+    ).execute()
+    payment_types = [r["payment_type"] for r in (payment_types_result.data or [])]
+
+    # Get date range
+    date_range = await get_data_date_range()
+
+    # Get table schemas (core tables only)
+    tables_sql = (
+        "SELECT table_name, column_name, data_type "
+        "FROM information_schema.columns "
+        "WHERE table_schema = 'public' "
+        "AND table_name IN ('orders', 'order_items', 'products', 'locations') "
+        "ORDER BY table_name, ordinal_position"
+    )
+    tables_result = client.rpc("execute_readonly_query", {"query_text": tables_sql}).execute()
+
+    tables: dict[str, list[dict[str, str]]] = {}
+    for row in tables_result.data or []:
+        table = row["table_name"]
+        if table not in tables:
+            tables[table] = []
+        tables[table].append({"column": row["column_name"], "type": row["data_type"]})
+
+    # Get materialized view schemas
+    views_sql = (
+        "SELECT c.relname as view_name, a.attname as column_name, "
+        "pg_catalog.format_type(a.atttypid, a.atttypmod) as data_type "
+        "FROM pg_catalog.pg_class c "
+        "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+        "JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid "
+        "WHERE c.relkind = 'm' AND n.nspname = 'public' "
+        "AND a.attnum > 0 AND NOT a.attisdropped "
+        "ORDER BY c.relname, a.attnum"
+    )
+    views_result = client.rpc("execute_readonly_query", {"query_text": views_sql}).execute()
+
+    views: dict[str, list[dict[str, str]]] = {}
+    for row in views_result.data or []:
+        view = row["view_name"]
+        if view not in views:
+            views[view] = []
+        views[view].append({"column": row["column_name"], "type": row["data_type"]})
+
+    # Get column comments
+    comments_sql = (
+        "SELECT c.relname as table_name, a.attname as column_name, d.description "
+        "FROM pg_catalog.pg_description d "
+        "JOIN pg_catalog.pg_class c ON d.objoid = c.oid "
+        "JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = d.objsubid "
+        "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = 'public' AND d.objsubid > 0"
+    )
+    comments_result = client.rpc(
+        "execute_readonly_query", {"query_text": comments_sql}
+    ).execute()
+
+    column_comments: dict[str, str] = {}
+    for row in comments_result.data or []:
+        key = f"{row['table_name']}.{row['column_name']}"
+        column_comments[key] = row["description"]
+
+    # Get materialized view comments
+    view_comments_sql = (
+        "SELECT c.relname as view_name, d.description "
+        "FROM pg_catalog.pg_description d "
+        "JOIN pg_catalog.pg_class c ON d.objoid = c.oid "
+        "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = 'public' AND c.relkind = 'm' AND d.objsubid = 0"
+    )
+    view_comments_result = client.rpc(
+        "execute_readonly_query", {"query_text": view_comments_sql}
+    ).execute()
+
+    view_comments: dict[str, str] = {}
+    for row in view_comments_result.data or []:
+        view_comments[row["view_name"]] = row["description"]
+
+    schema_info = SchemaInfo(
+        locations=locations,
+        sources=sources,
+        channels=channels,
+        categories=categories,
+        payment_types=payment_types,
+        date_range=date_range,
+        tables=tables,
+        views=views,
+        column_comments=column_comments,
+        view_comments=view_comments,
+    )
+
+    _schema_cache[cache_key] = (schema_info, time.time())
+    return schema_info

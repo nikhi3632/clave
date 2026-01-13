@@ -8,9 +8,9 @@ from typing import Callable, TypeVar
 
 from supabase import Client, create_client
 
-from .config import get_config
-from .exceptions import LoadError
-from .models import Order, Product
+from config import get_config
+from exceptions import LoadError
+from models import Order, Product
 
 logger = logging.getLogger(__name__)
 
@@ -297,15 +297,47 @@ class Loader:
         except Exception as e:
             raise LoadError("orders", f"Failed to get location: {e}")
 
-        # Insert order
+        # Insert order with all fields
         order_data = {
             "external_id": order.external_id,
             "source": order.source.value,
             "location_id": location_id,
             "channel": order.channel.value,
+            # Financial fields
             "subtotal_cents": order.subtotal_cents,
             "tax_cents": order.tax_cents,
             "tip_cents": order.tip_cents,
+            "delivery_fee_cents": order.delivery_fee_cents,
+            "service_fee_cents": order.service_fee_cents,
+            "commission_cents": order.commission_cents,
+            "merchant_payout_cents": order.merchant_payout_cents,
+            "processing_fee_cents": order.processing_fee_cents,
+            # Order status & timing
+            "order_status": order.order_status,
+            "pickup_time": order.pickup_time.isoformat() if order.pickup_time else None,
+            "delivery_time": order.delivery_time.isoformat() if order.delivery_time else None,
+            "closed_at": order.closed_at.isoformat() if order.closed_at else None,
+            # Order flags
+            "is_catering": order.is_catering,
+            "contains_alcohol": order.contains_alcohol,
+            "voided": order.voided,
+            "deleted": order.deleted,
+            "refund_status": order.refund_status,
+            # Payment info
+            "payment_type": order.payment_type,
+            "card_type": order.card_type,
+            # Toast-specific
+            "revenue_center": order.revenue_center,
+            "server_name": order.server_name,
+            "check_number": order.check_number,
+            "order_source": order.order_source,
+            "business_date": order.business_date,
+            # Delivery address
+            "delivery_street": order.delivery_street,
+            "delivery_city": order.delivery_city,
+            "delivery_state": order.delivery_state,
+            "delivery_zip": order.delivery_zip,
+            # Timestamps
             "created_at": order.created_at.isoformat(),
         }
 
@@ -340,6 +372,8 @@ class Loader:
                         "quantity": item.quantity,
                         "unit_price_cents": item.unit_price_cents,
                         "modifiers": [m.model_dump() for m in item.modifiers],
+                        "original_name": item.original_name,
+                        "special_instructions": item.special_instructions,
                     }
                 )
 

@@ -1,0 +1,55 @@
+services:
+  api:
+    build: ./api
+    ports:
+      - "8000:8000"
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CORS_ORIGINS=http://localhost:3000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  app:
+    build:
+      context: ./app
+      args:
+        - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+        - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        - NEXT_PUBLIC_API_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+  seed:
+    build: ./etl
+    volumes:
+      - ./data:/data
+      - ./supabase:/supabase
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DATABASE_URL=${DATABASE_URL}
+    command: >
+      sh -c "
+        echo 'Running migrations...' &&
+        for f in /supabase/migrations/*.sql; do
+          echo \"Applying $$f...\" &&
+          psql \"$$DATABASE_URL\" -f \"$$f\" -q
+        done &&
+        echo 'Running seed...' &&
+        for f in /supabase/seed/*.sql; do
+          echo \"Seeding $$f...\" &&
+          psql \"$$DATABASE_URL\" -f \"$$f\" -q
+        done &&
+        echo 'Running ETL...' &&
+        python -m main
+      "
+    profiles:
+      - seed

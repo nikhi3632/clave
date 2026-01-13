@@ -13,8 +13,8 @@ from dataclasses import dataclass
 
 from rapidfuzz import fuzz
 
-from .config import get_config
-from .models import Channel, Location
+from config import get_config
+from models import Channel, Location
 
 logger = logging.getLogger(__name__)
 

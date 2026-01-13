@@ -115,8 +115,8 @@ BEGIN
         RAISE EXCEPTION 'Only SELECT queries are allowed';
     END IF;
 
-    -- Block dangerous keywords
-    IF upper_query ~ '(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|GRANT|EXEC)' THEN
+    -- Block dangerous keywords (word boundaries to avoid false positives like "deleted")
+    IF upper_query ~ '\m(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|GRANT|EXEC)\M' THEN
         RAISE EXCEPTION 'Query contains forbidden keywords';
     END IF;
 

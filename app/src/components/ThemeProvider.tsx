@@ -1,17 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ThemeContext, Theme } from "@/hooks/useTheme";
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Theme>("light");
-  const [mounted, setMounted] = useState(false);
+  const mounted = useRef(false);
 
+  // Hydration: read theme from localStorage on mount (valid pattern for SSR)
   useEffect(() => {
-    setMounted(true);
+    mounted.current = true;
     try {
       const stored = localStorage.getItem("theme") as Theme | null;
       if (stored) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setTheme(stored);
       } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
         setTheme("dark");
@@ -22,7 +24,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!mounted) return;
+    if (!mounted.current) return;
 
     const root = document.documentElement;
     if (theme === "dark") {
@@ -35,15 +37,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // localStorage not available
     }
-  }, [theme, mounted]);
+  }, [theme]);
 
   const toggleTheme = () => {
     setTheme((prev) => (prev === "light" ? "dark" : "light"));
   };
-
-  if (!mounted) {
-    return <>{children}</>;
-  }
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>

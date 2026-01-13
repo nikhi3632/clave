@@ -11,13 +11,12 @@ from types import FrameType
 
 from dotenv import load_dotenv
 
-from .classifier import CategoryClassifier
-from .config import ETLConfig, setup_logging
-from .exceptions import ETLError, ExtractionError, LoadError
-from .extract import extract_doordash, extract_square, extract_toast, seed_locations
-from .load import Loader
-from .transform import Transformer
-from .validator import Validator
+from classifier import CategoryClassifier
+from config import ETLConfig, setup_logging
+from exceptions import ETLError, ExtractionError, LoadError
+from extract import extract_doordash, extract_square, extract_toast, seed_locations
+from load import Loader
+from transform import Transformer
 
 logger = logging.getLogger(__name__)
 
@@ -165,9 +164,6 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
 
         transformer = Transformer(existing_products, category_classifier=classifier)
 
-        # Initialize validator for anomaly detection
-        validator = Validator(run_id=run_id, client=loader.client)
-
         # Source configs
         sources = [
             ("toast", lambda: extract_toast(data_dir / "sources" / "toast_pos_export.json")),
@@ -178,6 +174,7 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
                     data_dir / "sources" / "square" / "orders.json",
                     data_dir / "sources" / "square" / "catalog.json",
                     data_dir / "sources" / "square" / "locations.json",
+                    data_dir / "sources" / "square" / "payments.json",
                 ),
             ),
         ]
@@ -204,8 +201,6 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
                     result = transformer.transform(raw_order)
 
                     if result.success and result.order:
-                        # Validate order and detect anomalies
-                        validator.validate_order(result.order, source_name)
                         source_transformed += 1
                         all_orders.append(result.order)
                     else:
@@ -222,10 +217,6 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
             logger.info(
                 f"  {source_name}: extracted={source_extracted}, transformed={source_transformed}"
             )
-
-        # Check for price variance across products
-        if not shutdown.should_stop:
-            validator.check_price_variance()
 
         # Run LLM category classification and apply normalized categories
         if not shutdown.should_stop and classifier:
@@ -268,11 +259,6 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
                 loader.refresh_views()
             except Exception as e:
                 logger.warning(f"Could not refresh views: {e}")
-
-        # Save anomalies and log validation summary
-        if not shutdown.should_stop:
-            validator.save_anomalies()
-            validator.log_summary()
 
     except KeyboardInterrupt:
         logger.warning("ETL interrupted by user")

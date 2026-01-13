@@ -50,6 +50,8 @@ export interface DrillDownFilters {
   date?: string;
   source?: string;
   channel?: string;
+  payment_type?: string;
+  category?: string;
 }
 
 // Chart component props

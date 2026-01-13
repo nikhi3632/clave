@@ -1,4 +1,4 @@
-.PHONY: help setup clean
+.PHONY: help up down build logs clean seed reset review review-stats lint lint-fix typecheck
 .DEFAULT_GOAL := help
 
 help:
@@ -6,33 +6,66 @@ help:
 	@echo "Restaurant Analytics Dashboard"
 	@echo "=============================="
 	@echo ""
-	@echo "Quick Start:"
-	@echo "  make setup   Install all dependencies"
-	@echo ""
-	@echo "Components (run from each directory):"
-	@echo "  cd app && make dev        Frontend (localhost:3000)"
-	@echo "  cd api && make dev        API (localhost:8000)"
-	@echo "  cd etl && make run        ETL pipeline"
-	@echo "  cd supabase && make migrate   Database migrations"
-	@echo ""
-	@echo "See Makefiles in: app/, api/, etl/, supabase/"
+	@echo "Commands:"
+	@echo "  make up           Start all services"
+	@echo "  make down         Stop all services"
+	@echo "  make seed         Run migrations + ETL (first-time setup)"
+	@echo "  make reset        Reset database and re-seed"
+	@echo "  make review       Interactive category review CLI"
+	@echo "  make review-stats Show category classification stats"
+	@echo "  make build        Rebuild containers"
+	@echo "  make logs         View container logs"
+	@echo "  make clean        Remove all Docker resources"
+	@echo "  make lint         Run all linters"
+	@echo "  make lint-fix     Run linters with auto-fix"
+	@echo "  make typecheck    Run TypeScript type checking"
 	@echo ""
 
-setup:
-	@echo "Setting up all components..."
-	cd app && $(MAKE) setup
-	cd api && $(MAKE) setup
-	cd etl && $(MAKE) setup
-	@echo ""
-	@echo "Setup complete! Next steps:"
-	@echo "  1. Copy .env.example to .env and fill in values"
-	@echo "  2. Run: cd supabase && make migrate"
-	@echo "  3. Run: cd etl && make run"
-	@echo "  4. Run: cd app && make dev"
-	@echo ""
+up:
+	docker compose up --build
+
+seed:
+	docker compose run --rm seed
+
+reset:
+	docker compose build seed
+	docker compose run --rm seed sh -c 'psql "$$DATABASE_URL" -f /supabase/reset.sql -q'
+	docker compose run --rm seed
+
+review:
+	docker compose run --rm -it seed python -m review
+
+review-stats:
+	docker compose run --rm seed python -m review --stats
+
+down:
+	docker compose down
+
+build:
+	docker compose build
+
+logs:
+	docker compose logs -f
 
 clean:
-	cd app && $(MAKE) clean
-	cd api && $(MAKE) clean
-	cd etl && $(MAKE) clean
-	@echo "Cleaned"
+	docker compose down --rmi all --volumes --remove-orphans
+	@echo "Docker resources cleaned up"
+
+lint:
+	@echo "Linting app (ESLint)..."
+	@docker run --rm -v $(PWD)/app:/app -w /app node:20-slim sh -c "npm ci --silent && npm run lint"
+	@echo "Linting api + etl (ruff)..."
+	@docker run --rm -v $(PWD):/src -w /src ghcr.io/astral-sh/ruff:latest check api/ etl/
+	@echo "✅ All lint checks passed"
+
+lint-fix:
+	@echo "Fixing app (ESLint)..."
+	@docker run --rm -v $(PWD)/app:/app -w /app node:20-slim sh -c "npm ci --silent && npm run lint -- --fix"
+	@echo "Fixing api + etl (ruff)..."
+	@docker run --rm -v $(PWD):/src -w /src ghcr.io/astral-sh/ruff:latest check api/ etl/ --fix
+	@echo "✅ Auto-fix complete"
+
+typecheck:
+	@echo "Type checking app (TypeScript)..."
+	@docker run --rm -v $(PWD)/app:/app -w /app node:20-slim sh -c "npm ci --silent && npm run typecheck"
+	@echo "✅ Type check passed"

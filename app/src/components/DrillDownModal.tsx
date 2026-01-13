@@ -10,12 +10,15 @@ interface DrillDownFilters {
   date?: string;
   source?: string;
   channel?: string;
+  payment_type?: string;
+  category?: string;
 }
 
 interface OrderItem {
   order_id: string;
   source: string;
   channel: string;
+  payment_type: string | null;
   location: string;
   product: string;
   category: string;
@@ -64,9 +67,11 @@ export function DrillDownModal({ filters, onClose }: DrillDownModalProps) {
         if (filters.date) params.set("date", filters.date);
         if (filters.source) params.set("source", filters.source);
         if (filters.channel) params.set("channel", filters.channel);
+        if (filters.payment_type) params.set("payment_type", filters.payment_type);
+        if (filters.category) params.set("category", filters.category);
 
         // Check if we have at least one valid filter
-        const hasValidFilter = filters.product || filters.location || filters.date || filters.source || filters.channel;
+        const hasValidFilter = filters.product || filters.location || filters.date || filters.source || filters.channel || filters.payment_type || filters.category;
         if (!hasValidFilter) {
           setError("No valid filter selected");
           setIsLoading(false);
@@ -106,6 +111,8 @@ export function DrillDownModal({ filters, onClose }: DrillDownModalProps) {
   // Build title from filters
   const filterParts: string[] = [];
   if (filters.product) filterParts.push(filters.product);
+  if (filters.category) filterParts.push(`Category: ${filters.category}`);
+  if (filters.payment_type) filterParts.push(`Payment: ${filters.payment_type}`);
   if (filters.location) filterParts.push(`@ ${filters.location}`);
   if (filters.date) filterParts.push(`on ${filters.date}`);
   if (filters.source) filterParts.push(`(${filters.source})`);

@@ -3,7 +3,14 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 
 from models import ErrorResponse, HealthResponse, QueryRequest, QueryResponse
-from services import DatabaseError, LLMError, execute_query, get_data_date_range, process_query
+from services import (
+    DatabaseError,
+    LLMError,
+    execute_query,
+    get_data_date_range,
+    process_query,
+    validate_chart_type,
+)
 
 router = APIRouter(prefix="/api", tags=["query"])
 
@@ -44,18 +51,21 @@ async def query(request: QueryRequest):
             detail={"error": str(e), "code": e.code, "retryable": e.retryable},
         )
 
+    # Validate and potentially correct chart type based on actual result shape
+    validated_result = validate_chart_type(data, llm_result)
+
     return {
         "success": True,
         "query": user_query,
-        "sql": llm_result.sql,
-        "chartType": llm_result.chart_type,
-        "title": llm_result.title,
-        "xAxis": llm_result.x_axis,
-        "yAxis": llm_result.y_axis,
-        "dataKey": llm_result.data_key,
-        "nameKey": llm_result.name_key,
-        "valueFormat": llm_result.value_format,
-        "summary": llm_result.summary,
+        "sql": validated_result.sql,
+        "chartType": validated_result.chart_type,
+        "title": validated_result.title,
+        "xAxis": validated_result.x_axis,
+        "yAxis": validated_result.y_axis,
+        "dataKey": validated_result.data_key,
+        "nameKey": validated_result.name_key,
+        "valueFormat": validated_result.value_format,
+        "summary": validated_result.summary,
         "data": data,
         "dataRange": date_range.formatted,
     }
