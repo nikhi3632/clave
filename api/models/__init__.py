@@ -1,7 +1,9 @@
 from .schemas import (
     ChartType,
+    DrillDownConfig,
     DrillDownParams,
     DrillDownResponse,
+    DrillDownType,
     ErrorResponse,
     HealthResponse,
     QueryRequest,
@@ -12,6 +14,8 @@ from .schemas import (
 __all__ = [
     "ChartType",
     "ValueFormat",
+    "DrillDownType",
+    "DrillDownConfig",
     "QueryRequest",
     "QueryResponse",
     "DrillDownParams",

@@ -19,6 +19,7 @@ export function ChartWrapper({
   nameKey,
   valueFormat,
   summary,
+  drillDown,
   onDataClick,
 }: ChartProps) {
   const { theme } = useTheme();
@@ -41,7 +42,7 @@ export function ChartWrapper({
 
   // Table
   if (type === "table") {
-    return <TableView data={data} valueFormat={valueFormat} onDataClick={onDataClick} />;
+    return <TableView data={data} valueFormat={valueFormat} drillDown={drillDown} onDataClick={onDataClick} />;
   }
 
   // Helper to safely get keys from first data row
@@ -61,6 +62,7 @@ export function ChartWrapper({
         nameKey={name}
         valueFormat={valueFormat}
         isDark={isDark}
+        drillDown={drillDown}
         onDataClick={onDataClick}
       />
     );
@@ -77,6 +79,7 @@ export function ChartWrapper({
         yAxis={y}
         valueFormat={valueFormat}
         isDark={isDark}
+        drillDown={drillDown}
         onDataClick={onDataClick}
       />
     );
@@ -92,6 +95,7 @@ export function ChartWrapper({
       yAxis={y}
       valueFormat={valueFormat}
       isDark={isDark}
+      drillDown={drillDown}
       onDataClick={onDataClick}
     />
   );

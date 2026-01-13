@@ -14,8 +14,17 @@ from dotenv import load_dotenv
 from classifier import CategoryClassifier
 from config import ETLConfig, setup_logging
 from exceptions import ETLError, ExtractionError, LoadError
-from extract import extract_doordash, extract_square, extract_toast, seed_locations
+from extract import (
+    extract_doordash,
+    extract_locations_from_doordash,
+    extract_locations_from_square,
+    extract_locations_from_toast,
+    extract_square,
+    extract_toast,
+    merge_locations,
+)
 from load import Loader
+from matchers import init_location_matcher
 from transform import Transformer
 
 logger = logging.getLogger(__name__)
@@ -135,13 +144,37 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
         raise
 
     try:
-        # Seed location matcher from database
-        try:
+        # Extract locations from ALL source files first
+        logger.info("Extracting locations from source files...")
+        all_locations = []
+
+        # Extract from each source
+        toast_file = data_dir / "sources" / "toast_pos_export.json"
+        if toast_file.exists():
+            all_locations.extend(extract_locations_from_toast(toast_file))
+
+        doordash_file = data_dir / "sources" / "doordash_orders.json"
+        if doordash_file.exists():
+            all_locations.extend(extract_locations_from_doordash(doordash_file))
+
+        square_locations_file = data_dir / "sources" / "square" / "locations.json"
+        if square_locations_file.exists():
+            all_locations.extend(extract_locations_from_square(square_locations_file))
+
+        # Merge by name and upsert to database
+        merged_locations = merge_locations(all_locations)
+        if merged_locations:
+            location_mapping = loader.upsert_locations(merged_locations)
+            location_names = list(location_mapping.keys())
+            logger.info(f"Upserted {len(merged_locations)} locations to database")
+        else:
+            # Fall back to existing locations in database
             location_names = loader.get_location_names()
-            seed_locations(location_names)
-            logger.info(f"Loaded {len(location_names)} locations from database")
-        except Exception as e:
-            logger.warning(f"Could not seed locations from database: {e}")
+            logger.warning("No locations found in source files, using existing DB locations")
+
+        # Initialize location matcher with known names
+        init_location_matcher(location_names)
+        logger.info(f"Location matcher initialized with {len(location_names)} locations")
 
         shutdown.check_or_raise()
 

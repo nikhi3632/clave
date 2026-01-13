@@ -44,10 +44,14 @@ services:
           psql \"$$DATABASE_URL\" -f \"$$f\" -q
         done &&
         echo 'Running seed...' &&
-        for f in /supabase/seed/*.sql; do
-          echo \"Seeding $$f...\" &&
-          psql \"$$DATABASE_URL\" -f \"$$f\" -q
-        done &&
+        if ls /supabase/seed/*.sql 1>/dev/null 2>&1; then
+          for f in /supabase/seed/*.sql; do
+            echo \"Seeding $$f...\" &&
+            psql \"$$DATABASE_URL\" -f \"$$f\" -q
+          done
+        else
+          echo 'No seed files found (locations now created by ETL)'
+        fi &&
         echo 'Running ETL...' &&
         python -m main
       "

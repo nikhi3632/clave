@@ -1,16 +1,21 @@
 """Load transformed data into Supabase."""
 
+from __future__ import annotations
+
 import logging
 import os
 import time
 from functools import wraps
-from typing import Callable, TypeVar
+from typing import TYPE_CHECKING, Callable, TypeVar
 
 from supabase import Client, create_client
 
 from config import get_config
 from exceptions import LoadError
 from models import Order, Product
+
+if TYPE_CHECKING:
+    from extract import ExtractedLocation
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +142,42 @@ class Loader:
         locations = [row["name"] for row in result.data] if result.data else []
         logger.debug(f"Loaded {len(locations)} locations from database")
         return locations
+
+    @with_retry()
+    def upsert_locations(self, locations: list[ExtractedLocation]) -> dict[str, str]:
+        """
+        Upsert locations to database.
+
+        Args:
+            locations: List of extracted locations from source files.
+
+        Returns:
+            Mapping of location name -> location UUID.
+        """
+        if not locations:
+            return {}
+
+        for loc in locations:
+            data = {
+                "name": loc.name,
+                "street": loc.street,
+                "city": loc.city,
+                "state": loc.state,
+                "zip_code": loc.zip_code,
+                "timezone": loc.timezone,
+            }
+            self.client.table("locations").upsert(data, on_conflict="name").execute()
+            logger.debug(f"Upserted location: {loc.name}")
+
+        # Refresh cache and return mapping
+        result = self.client.table("locations").select("id, name").execute()
+        mapping = {row["name"]: row["id"] for row in result.data} if result.data else {}
+
+        # Update cache
+        self._location_cache.update(mapping)
+
+        logger.info(f"Upserted {len(locations)} locations")
+        return mapping
 
     # -------------------------------------------------------------------------
     # HELPER METHODS
@@ -291,7 +332,7 @@ class Loader:
             LoadError: If order cannot be loaded.
         """
         try:
-            location_id = self._get_location_id(order.location.value)
+            location_id = self._get_location_id(order.location)  # location is now a string
         except LoadError:
             raise
         except Exception as e:

@@ -41,6 +41,9 @@ async def drill_down(
                 source,
                 channel,
                 payment_type,
+                subtotal_cents,
+                tax_cents,
+                tip_cents,
                 total_cents,
                 created_at,
                 locations!inner ( name )
@@ -83,6 +86,9 @@ async def drill_down(
                 "quantity": item.get("quantity"),
                 "unit_price_cents": item.get("unit_price_cents"),
                 "item_total_cents": item.get("total_cents"),
+                "order_subtotal_cents": order_data.get("subtotal_cents") if order_data else None,
+                "order_tax_cents": order_data.get("tax_cents") if order_data else None,
+                "order_tip_cents": order_data.get("tip_cents") if order_data else None,
                 "order_total_cents": order_data.get("total_cents") if order_data else None,
                 "created_at": order_data.get("created_at") if order_data else None,
             })
@@ -90,6 +96,24 @@ async def drill_down(
         # Filter by date if specified
         if date:
             orders = [o for o in orders if o.get("created_at", "").startswith(date)]
+
+        # Calculate summary from unique orders
+        unique_orders: dict[str, dict] = {}
+        for o in orders:
+            oid = o.get("order_id")
+            if oid and oid not in unique_orders:
+                unique_orders[oid] = {
+                    "subtotal_cents": o.get("order_subtotal_cents", 0),
+                    "tax_cents": o.get("order_tax_cents", 0),
+                    "tip_cents": o.get("order_tip_cents", 0),
+                    "total_cents": o.get("order_total_cents", 0),
+                }
+
+        item_subtotal = sum(o.get("item_total_cents", 0) for o in orders)
+        order_count = len(unique_orders)
+        total_tax = sum(v["tax_cents"] for v in unique_orders.values())
+        total_tips = sum(v["tip_cents"] for v in unique_orders.values())
+        total_revenue = sum(v["total_cents"] for v in unique_orders.values())
 
         return {
             "success": True,
@@ -105,6 +129,14 @@ async def drill_down(
             },
             "count": len(orders),
             "orders": orders,
+            "summary": {
+                "item_count": len(orders),
+                "order_count": order_count,
+                "item_subtotal_cents": item_subtotal,
+                "tax_cents": total_tax,
+                "tip_cents": total_tips,
+                "revenue_cents": total_revenue,
+            },
         }
 
     except Exception as e:

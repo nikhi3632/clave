@@ -1,6 +1,14 @@
 // Chart types
 export type ChartType = "bar" | "line" | "pie" | "table" | "metric" | "info";
 export type ValueFormat = "currency" | "number" | "percent";
+export type DrillDownType = "location" | "date" | "product" | "category" | "source" | "channel";
+
+// Drill-down configuration from LLM
+export interface DrillDownConfig {
+  enabled: boolean;
+  type?: DrillDownType;
+  column?: string;
+}
 
 // Widget data structure
 export interface WidgetData {
@@ -17,6 +25,7 @@ export interface WidgetData {
   summary: string;
   sql: string;
   dataRange: string;
+  drillDown?: DrillDownConfig;
 }
 
 // API error structure
@@ -41,6 +50,7 @@ export interface QueryResponse {
   summary: string;
   data: Record<string, unknown>[];
   dataRange: string;
+  drillDown?: DrillDownConfig;
 }
 
 // Drill-down filter for clicking on chart data
@@ -64,5 +74,6 @@ export interface ChartProps {
   nameKey?: string;
   valueFormat?: ValueFormat;
   summary?: string;
+  drillDown?: DrillDownConfig;
   onDataClick?: (filters: DrillDownFilters) => void;
 }

@@ -11,7 +11,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
-import { ValueFormat, DrillDownFilters } from "@/types";
+import { ValueFormat, DrillDownFilters, DrillDownConfig } from "@/types";
 import {
   getChartColors,
   createFormatter,
@@ -25,6 +25,7 @@ interface BarChartViewProps {
   yAxis: string;
   valueFormat?: ValueFormat;
   isDark: boolean;
+  drillDown?: DrillDownConfig;
   onDataClick?: (filters: DrillDownFilters) => void;
 }
 
@@ -34,6 +35,7 @@ export function BarChartView({
   yAxis,
   valueFormat,
   isDark,
+  drillDown,
   onDataClick,
 }: BarChartViewProps) {
   const colors = getChartColors(isDark);
@@ -41,45 +43,46 @@ export function BarChartView({
   const formatTick = createTickFormatter(valueFormat);
   const unitLabel = getUnitLabel(valueFormat, yAxis);
 
-  // Build drill-down filters from data row
+  // Check if drill-down is enabled
+  const isDrillDownEnabled = drillDown?.enabled && onDataClick;
+
+  // Build drill-down filters from data row using LLM-provided config
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleBarClick = (entry: any) => {
-    if (!onDataClick) return;
+    if (!isDrillDownEnabled || !drillDown?.type || !drillDown?.column) return;
 
     // Get the actual data - recharts wraps it in payload sometimes
     const rowData = entry?.payload || entry;
+    const value = rowData?.[drillDown.column];
+
+    if (value === null || value === undefined || value === "") return;
+
     const filters: DrillDownFilters = {};
+    const strValue = String(value);
 
-    // Try to extract filter values from the row data
-    const product = rowData?.product || rowData?.name || rowData?.canonical_name || rowData?.[xAxis];
-    const location = rowData?.location;
-    const date = rowData?.date;
-    const source = rowData?.source;
-    const channel = rowData?.channel;
-    const payment_type = rowData?.payment_type;
-    const category = rowData?.category;
-
-    // Detect which filter to use based on xAxis or available data
-    const xLower = xAxis.toLowerCase();
-    if (xLower.includes("product") || xLower === "name" || xLower === "canonical_name") {
-      if (product) filters.product = String(product);
-    } else if (xLower.includes("location")) {
-      if (location) filters.location = String(location);
-    } else if (xLower.includes("date") || xLower.includes("day")) {
-      if (date) filters.date = String(date);
-    } else if (xLower.includes("source")) {
-      if (source) filters.source = String(source);
-    } else if (xLower.includes("channel")) {
-      if (channel) filters.channel = String(channel);
-    } else if (xLower.includes("payment")) {
-      if (payment_type) filters.payment_type = String(payment_type);
-    } else if (xLower.includes("category")) {
-      if (category) filters.category = String(category);
-    } else if (product) {
-      filters.product = String(product);
+    // Use the LLM-specified type to set the correct filter
+    switch (drillDown.type) {
+      case "product":
+        filters.product = strValue;
+        break;
+      case "location":
+        filters.location = strValue;
+        break;
+      case "date":
+        filters.date = strValue;
+        break;
+      case "source":
+        filters.source = strValue;
+        break;
+      case "channel":
+        filters.channel = strValue;
+        break;
+      case "category":
+        filters.category = strValue;
+        break;
     }
 
-    if (Object.keys(filters).length > 0 && Object.values(filters).some(v => v)) {
+    if (Object.keys(filters).length > 0) {
       onDataClick(filters);
     }
   };
@@ -137,10 +140,10 @@ export function BarChartView({
           radius={[4, 4, 0, 0]}
           maxBarSize={60}
           onClick={(entry) => handleBarClick(entry)}
-          style={{ cursor: onDataClick ? "pointer" : "default" }}
+          style={{ cursor: isDrillDownEnabled ? "pointer" : "default" }}
         >
           {data.map((_, index) => (
-            <Cell key={`cell-${index}`} className={onDataClick ? "hover:opacity-80" : ""} />
+            <Cell key={`cell-${index}`} className={isDrillDownEnabled ? "hover:opacity-80" : ""} />
           ))}
         </Bar>
       </BarChart>

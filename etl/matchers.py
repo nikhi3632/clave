@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from rapidfuzz import fuzz
 
 from config import get_config
-from models import Channel, Location
+from models import Channel
 
 logger = logging.getLogger(__name__)
 
@@ -202,41 +202,37 @@ class CategoryMatcher:
 
 
 class LocationMatcher:
-    """Match strings to Location enum values."""
+    """Match strings to known location names (dynamic, no enum)."""
 
-    def __init__(self, threshold: int | None = None):
+    def __init__(
+        self, known_locations: list[str] | None = None, threshold: int | None = None
+    ):
         if threshold is None:
             threshold = get_config().matching.location_threshold
         self.threshold = threshold
-        self._known: dict[str, Location] = {}
-        self._phonetic: dict[str, Location] = {}
-        self._seed_enum()
+        self._known: dict[str, str] = {}  # normalized -> canonical name
+        self._phonetic: dict[str, str] = {}  # phonetic key -> canonical name
 
-    def _seed_enum(self) -> None:
-        """Seed with Location enum values."""
-        for loc in Location:
-            self._add(loc.value, loc)
+        if known_locations:
+            self.seed(known_locations)
 
-    def _add(self, name: str, location: Location) -> None:
+    def _add(self, name: str) -> None:
+        """Add a location name to the matcher."""
         norm = name.lower().strip()
-        self._known[norm] = location
+        self._known[norm] = name  # Store canonical form
         pkey = phonetic_key(norm)
         if pkey:
-            self._phonetic[pkey] = location
+            self._phonetic[pkey] = name
 
     def seed(self, names: list[str]) -> None:
-        """Seed with database location names."""
+        """Seed with location names."""
         for name in names:
-            name_lower = name.lower()
-            for loc in Location:
-                if loc.value.lower() == name_lower:
-                    self._add(name, loc)
-                    break
+            self._add(name)
         if names:
             logger.info(f"LocationMatcher seeded with {len(names)} locations")
 
-    def match(self, text: str) -> tuple[Location | None, str]:
-        """Match text to Location. Returns (location, method)."""
+    def match(self, text: str) -> tuple[str | None, str]:
+        """Match text to a location name. Returns (location_name, method)."""
         if not text:
             return None, "none"
 
@@ -252,16 +248,16 @@ class LocationMatcher:
             return self._phonetic[pkey], "phonetic"
 
         # Keyword (substring)
-        for known, loc in self._known.items():
+        for known, canonical in self._known.items():
             if known in text_lower or text_lower in known:
-                return loc, "keyword"
+                return canonical, "keyword"
 
         # Fuzzy
         best, best_score = None, 0
-        for known, loc in self._known.items():
+        for known, canonical in self._known.items():
             score = fuzz.partial_ratio(text_lower, known)
             if score > best_score and score >= self.threshold:
-                best_score, best = score, loc
+                best_score, best = score, canonical
 
         if best:
             return best, "fuzzy"
@@ -365,10 +361,22 @@ def get_category_matcher() -> CategoryMatcher:
     return _category_matcher
 
 
-def get_location_matcher() -> LocationMatcher:
+def init_location_matcher(known_locations: list[str]) -> LocationMatcher:
+    """Initialize location matcher with known locations.
+
+    Must be called before get_location_matcher().
+    """
     global _location_matcher
+    _location_matcher = LocationMatcher(known_locations)
+    return _location_matcher
+
+
+def get_location_matcher() -> LocationMatcher:
+    """Get the location matcher. Raises if not initialized."""
     if _location_matcher is None:
-        _location_matcher = LocationMatcher()
+        raise RuntimeError(
+            "LocationMatcher not initialized. Call init_location_matcher() first."
+        )
     return _location_matcher
 
 

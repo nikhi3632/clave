@@ -2,6 +2,7 @@
 
 import json
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
@@ -11,6 +12,145 @@ from matchers import get_channel_matcher, get_location_matcher
 from models import Source
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# LOCATION EXTRACTION (for dynamic location discovery)
+# =============================================================================
+
+
+@dataclass
+class ExtractedLocation:
+    """Location extracted from source data."""
+
+    name: str
+    street: str | None = None
+    city: str | None = None
+    state: str | None = None
+    zip_code: str | None = None
+    timezone: str = "America/New_York"
+    source_ids: dict[str, str] = field(default_factory=dict)  # source -> id
+
+
+def extract_locations_from_toast(data_path: Path) -> list[ExtractedLocation]:
+    """Extract locations from Toast POS export."""
+    locations = []
+    try:
+        with open(data_path) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning(f"Could not load Toast data for locations: {e}")
+        return locations
+
+    for loc in data.get("locations", []):
+        name = loc.get("name", "").strip()
+        if not name:
+            continue
+
+        address = loc.get("address", {})
+        locations.append(
+            ExtractedLocation(
+                name=name,
+                street=address.get("line1"),
+                city=address.get("city"),
+                state=address.get("state"),
+                zip_code=address.get("zip"),
+                timezone=loc.get("timezone", "America/New_York"),
+                source_ids={"toast": loc.get("guid", "")},
+            )
+        )
+
+    logger.info(f"Toast: Extracted {len(locations)} locations")
+    return locations
+
+
+def extract_locations_from_doordash(data_path: Path) -> list[ExtractedLocation]:
+    """Extract locations from DoorDash stores."""
+    locations = []
+    try:
+        with open(data_path) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning(f"Could not load DoorDash data for locations: {e}")
+        return locations
+
+    for store in data.get("stores", []):
+        name = store.get("name", "").strip()
+        if not name:
+            continue
+
+        address = store.get("address", {})
+        locations.append(
+            ExtractedLocation(
+                name=name,
+                street=address.get("street"),
+                city=address.get("city"),
+                state=address.get("state"),
+                zip_code=address.get("zip_code"),
+                timezone=store.get("timezone", "America/New_York"),
+                source_ids={"doordash": store.get("store_id", "")},
+            )
+        )
+
+    logger.info(f"DoorDash: Extracted {len(locations)} locations")
+    return locations
+
+
+def extract_locations_from_square(locations_path: Path) -> list[ExtractedLocation]:
+    """Extract locations from Square locations.json."""
+    locations = []
+    try:
+        with open(locations_path) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning(f"Could not load Square locations: {e}")
+        return locations
+
+    for loc in data.get("locations", []):
+        name = loc.get("name", "").strip()
+        if not name:
+            continue
+
+        address = loc.get("address", {})
+        locations.append(
+            ExtractedLocation(
+                name=name,
+                street=address.get("address_line_1"),
+                city=address.get("locality"),
+                state=address.get("administrative_district_level_1"),
+                zip_code=address.get("postal_code"),
+                timezone=loc.get("timezone", "America/New_York"),
+                source_ids={"square": loc.get("id", "")},
+            )
+        )
+
+    logger.info(f"Square: Extracted {len(locations)} locations")
+    return locations
+
+
+def merge_locations(all_locations: list[ExtractedLocation]) -> list[ExtractedLocation]:
+    """Merge locations by normalized name, combining source IDs."""
+    merged: dict[str, ExtractedLocation] = {}
+
+    for loc in all_locations:
+        key = loc.name.lower().strip()
+
+        if key in merged:
+            # Merge source IDs
+            merged[key].source_ids.update(loc.source_ids)
+            # Fill in missing address fields
+            if not merged[key].street and loc.street:
+                merged[key].street = loc.street
+            if not merged[key].city and loc.city:
+                merged[key].city = loc.city
+            if not merged[key].state and loc.state:
+                merged[key].state = loc.state
+            if not merged[key].zip_code and loc.zip_code:
+                merged[key].zip_code = loc.zip_code
+        else:
+            merged[key] = loc
+
+    return list(merged.values())
 
 
 # =============================================================================
@@ -583,11 +723,3 @@ def extract_square(
         }
 
 
-# =============================================================================
-# SEEDING (called from main.py)
-# =============================================================================
-
-
-def seed_locations(names: list[str]) -> None:
-    """Seed location matcher with database names."""
-    get_location_matcher().seed(names)

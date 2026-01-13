@@ -25,8 +25,33 @@ interface OrderItem {
   quantity: number;
   unit_price_cents: number;
   item_total_cents: number;
+  order_subtotal_cents: number;
+  order_tax_cents: number;
+  order_tip_cents: number;
   order_total_cents: number;
   created_at: string;
+}
+
+interface GroupedOrder {
+  order_id: string;
+  source: string;
+  channel: string;
+  location: string;
+  created_at: string;
+  items: OrderItem[];
+  subtotal_cents: number;
+  tax_cents: number;
+  tip_cents: number;
+  total_cents: number;
+}
+
+interface DrillDownSummary {
+  item_count: number;
+  order_count: number;
+  item_subtotal_cents: number;
+  tax_cents: number;
+  tip_cents: number;
+  revenue_cents: number;
 }
 
 interface DrillDownModalProps {
@@ -50,8 +75,36 @@ function formatDateTime(dateStr: string): string {
   });
 }
 
+function groupByOrder(items: OrderItem[]): GroupedOrder[] {
+  const groups = new Map<string, GroupedOrder>();
+
+  for (const item of items) {
+    if (!groups.has(item.order_id)) {
+      groups.set(item.order_id, {
+        order_id: item.order_id,
+        source: item.source,
+        channel: item.channel,
+        location: item.location,
+        created_at: item.created_at,
+        items: [],
+        subtotal_cents: item.order_subtotal_cents || 0,
+        tax_cents: item.order_tax_cents || 0,
+        tip_cents: item.order_tip_cents || 0,
+        total_cents: item.order_total_cents || 0,
+      });
+    }
+    groups.get(item.order_id)!.items.push(item);
+  }
+
+  // Sort by created_at descending
+  return Array.from(groups.values()).sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+}
+
 export function DrillDownModal({ filters, onClose }: DrillDownModalProps) {
   const [orders, setOrders] = useState<OrderItem[]>([]);
+  const [summary, setSummary] = useState<DrillDownSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -88,6 +141,7 @@ export function DrillDownModal({ filters, onClose }: DrillDownModalProps) {
         }
 
         setOrders(data.orders || []);
+        setSummary(data.summary || null);
       } catch (err) {
         console.error("Drill-down fetch error:", err);
         setError("Failed to fetch order details");
@@ -172,117 +226,169 @@ export function DrillDownModal({ filters, onClose }: DrillDownModalProps) {
 
           {!isLoading && !error && orders.length > 0 && (
             <>
-              {/* Mobile: Card layout */}
-              <div className="sm:hidden space-y-3">
-                {orders.map((order, i) => (
+              {/* Mobile: Grouped card layout */}
+              <div className="sm:hidden space-y-4">
+                {groupByOrder(orders).map((group) => (
                   <div
-                    key={`${order.order_id}-${i}`}
-                    className="bg-slate-50 dark:bg-zinc-800 rounded-lg p-4"
+                    key={group.order_id}
+                    className="bg-slate-50 dark:bg-zinc-800 rounded-lg overflow-hidden"
                   >
-                    <div className="flex justify-between items-start mb-2">
-                      <span className="font-medium text-slate-900 dark:text-zinc-100">
-                        {order.product}
-                      </span>
-                      <span className="font-medium text-slate-900 dark:text-zinc-100">
-                        {formatCurrency(order.item_total_cents)}
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-2 text-xs text-slate-500 dark:text-zinc-400">
-                      <span>{formatDateTime(order.created_at)}</span>
-                      <span>•</span>
-                      <span>{order.location}</span>
-                      <span>•</span>
-                      <span className="px-1.5 py-0.5 bg-slate-200 dark:bg-zinc-700 rounded">
-                        {order.source}
+                    {/* Order header */}
+                    <div className="px-4 py-2 border-b border-slate-200 dark:border-zinc-700">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-medium text-slate-900 dark:text-zinc-100">
+                          {formatDateTime(group.created_at)}
+                        </span>
+                        <span className="px-2 py-0.5 bg-slate-200 dark:bg-zinc-700 rounded text-xs">
+                          {group.source}
+                        </span>
+                      </div>
+                      <span className="text-xs text-slate-500 dark:text-zinc-400">
+                        {group.location}
                       </span>
                     </div>
-                    <div className="flex justify-between mt-2 text-sm text-slate-600 dark:text-zinc-400">
-                      <span>Qty: {order.quantity}</span>
-                      <span>@ {formatCurrency(order.unit_price_cents)}</span>
+
+                    {/* Items */}
+                    <div className="px-4 py-2 space-y-2">
+                      {group.items.map((item, i) => (
+                        <div key={i} className="flex justify-between text-sm">
+                          <span className="text-slate-900 dark:text-zinc-100">
+                            {item.product} <span className="text-slate-500">x{item.quantity}</span>
+                          </span>
+                          <span className="text-slate-900 dark:text-zinc-100 font-medium">
+                            {formatCurrency(item.item_total_cents)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Order totals */}
+                    <div className="px-4 py-2 border-t border-slate-200 dark:border-zinc-700 bg-slate-100 dark:bg-zinc-700/50">
+                      <div className="flex justify-between text-xs text-slate-500 dark:text-zinc-400">
+                        <span>Subtotal</span>
+                        <span>{formatCurrency(group.subtotal_cents)}</span>
+                      </div>
+                      {group.tax_cents > 0 && (
+                        <div className="flex justify-between text-xs text-slate-500 dark:text-zinc-400">
+                          <span>Tax</span>
+                          <span>{formatCurrency(group.tax_cents)}</span>
+                        </div>
+                      )}
+                      {group.tip_cents > 0 && (
+                        <div className="flex justify-between text-xs text-slate-500 dark:text-zinc-400">
+                          <span>Tip</span>
+                          <span>{formatCurrency(group.tip_cents)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between text-sm font-semibold text-slate-900 dark:text-zinc-100 mt-1">
+                        <span>Total</span>
+                        <span>{formatCurrency(group.total_cents)}</span>
+                      </div>
                     </div>
                   </div>
                 ))}
               </div>
 
-              {/* Desktop: Table layout */}
-              <div className="hidden sm:block overflow-x-auto">
-                <table className="min-w-full">
-                  <thead className="bg-slate-50 dark:bg-zinc-800 sticky top-0">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-zinc-400 uppercase">
-                        Time
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-zinc-400 uppercase">
-                        Product
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-zinc-400 uppercase">
-                        Source
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600 dark:text-zinc-400 uppercase">
-                        Location
-                      </th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600 dark:text-zinc-400 uppercase">
-                        Qty
-                      </th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600 dark:text-zinc-400 uppercase">
-                        Price
-                      </th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600 dark:text-zinc-400 uppercase">
-                        Total
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-zinc-800">
-                    {orders.map((order, i) => (
-                      <tr
-                        key={`${order.order_id}-${i}`}
-                        className="hover:bg-slate-50 dark:hover:bg-zinc-800/50"
-                      >
-                        <td className="px-4 py-3 text-sm text-slate-600 dark:text-zinc-400 whitespace-nowrap">
-                          {formatDateTime(order.created_at)}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-slate-900 dark:text-zinc-100 font-medium">
-                          {order.product}
-                        </td>
-                        <td className="px-4 py-3 text-sm">
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300">
-                            {order.source}
+              {/* Desktop: Grouped by order */}
+              <div className="hidden sm:block space-y-4">
+                {groupByOrder(orders).map((group) => (
+                  <div
+                    key={group.order_id}
+                    className="border border-slate-200 dark:border-zinc-700 rounded-lg overflow-hidden"
+                  >
+                    {/* Order header */}
+                    <div className="bg-slate-50 dark:bg-zinc-800 px-4 py-2 flex justify-between items-center">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-medium text-slate-900 dark:text-zinc-100">
+                          {formatDateTime(group.created_at)}
+                        </span>
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-200 dark:bg-zinc-700 text-slate-700 dark:text-zinc-300">
+                          {group.source}
+                        </span>
+                        <span className="text-xs text-slate-500 dark:text-zinc-400">
+                          {group.location}
+                        </span>
+                      </div>
+                      <span className="text-xs text-slate-400 dark:text-zinc-500 font-mono">
+                        {group.order_id.slice(0, 20)}...
+                      </span>
+                    </div>
+
+                    {/* Items */}
+                    <table className="min-w-full">
+                      <tbody className="divide-y divide-slate-100 dark:divide-zinc-800">
+                        {group.items.map((item, i) => (
+                          <tr key={i} className="hover:bg-slate-50 dark:hover:bg-zinc-800/30">
+                            <td className="px-4 py-2 text-sm text-slate-900 dark:text-zinc-100">
+                              {item.product}
+                            </td>
+                            <td className="px-4 py-2 text-sm text-slate-500 dark:text-zinc-400 text-right w-16">
+                              x{item.quantity}
+                            </td>
+                            <td className="px-4 py-2 text-sm text-slate-500 dark:text-zinc-400 text-right w-24">
+                              @ {formatCurrency(item.unit_price_cents)}
+                            </td>
+                            <td className="px-4 py-2 text-sm text-slate-900 dark:text-zinc-100 font-medium text-right w-24">
+                              {formatCurrency(item.item_total_cents)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    {/* Order totals */}
+                    <div className="bg-slate-50 dark:bg-zinc-800/50 px-4 py-2 border-t border-slate-200 dark:border-zinc-700">
+                      <div className="flex justify-end gap-6 text-sm">
+                        <span className="text-slate-500 dark:text-zinc-400">
+                          Subtotal: {formatCurrency(group.subtotal_cents)}
+                        </span>
+                        {group.tax_cents > 0 && (
+                          <span className="text-slate-500 dark:text-zinc-400">
+                            Tax: {formatCurrency(group.tax_cents)}
                           </span>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-slate-600 dark:text-zinc-400">
-                          {order.location}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-slate-600 dark:text-zinc-400 text-right">
-                          {order.quantity}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-slate-600 dark:text-zinc-400 text-right">
-                          {formatCurrency(order.unit_price_cents)}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-slate-900 dark:text-zinc-100 font-medium text-right">
-                          {formatCurrency(order.item_total_cents)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        )}
+                        {group.tip_cents > 0 && (
+                          <span className="text-slate-500 dark:text-zinc-400">
+                            Tip: {formatCurrency(group.tip_cents)}
+                          </span>
+                        )}
+                        <span className="font-semibold text-slate-900 dark:text-zinc-100">
+                          Total: {formatCurrency(group.total_cents)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </>
           )}
         </div>
 
-        {/* Footer */}
-        {!isLoading && orders.length > 0 && (
+        {/* Footer with breakdown */}
+        {!isLoading && orders.length > 0 && summary && (
           <div className="px-4 sm:px-6 py-3 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-800/50">
-            <div className="flex justify-between text-sm">
+            <div className="flex flex-col sm:flex-row sm:justify-between gap-2 text-sm">
               <span className="text-slate-500 dark:text-zinc-400">
-                {orders.length} {orders.length === 1 ? "item" : "items"}
+                {summary.item_count} {summary.item_count === 1 ? "item" : "items"} from {summary.order_count} {summary.order_count === 1 ? "order" : "orders"}
               </span>
-              <span className="font-medium text-slate-900 dark:text-zinc-100">
-                Total:{" "}
-                {formatCurrency(
-                  orders.reduce((sum, o) => sum + o.item_total_cents, 0)
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-right">
+                <span className="text-slate-600 dark:text-zinc-400">
+                  Subtotal: {formatCurrency(summary.item_subtotal_cents)}
+                </span>
+                {summary.tax_cents > 0 && (
+                  <span className="text-slate-600 dark:text-zinc-400">
+                    Tax: {formatCurrency(summary.tax_cents)}
+                  </span>
                 )}
-              </span>
+                {summary.tip_cents > 0 && (
+                  <span className="text-slate-600 dark:text-zinc-400">
+                    Tips: {formatCurrency(summary.tip_cents)}
+                  </span>
+                )}
+                <span className="font-semibold text-slate-900 dark:text-zinc-100">
+                  Revenue: {formatCurrency(summary.revenue_cents)}
+                </span>
+              </div>
             </div>
           </div>
         )}

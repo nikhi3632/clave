@@ -23,6 +23,16 @@ class LLMError(Exception):
 
 ChartType = Literal["bar", "line", "pie", "table", "metric", "info"]
 ValueFormat = Literal["currency", "number", "percent"]
+DrillDownType = Literal["location", "date", "product", "category", "source", "channel"]
+
+
+@dataclass
+class DrillDownConfig:
+    """Configuration for drill-down functionality."""
+
+    enabled: bool
+    type: DrillDownType | None = None
+    column: str | None = None
 
 
 @dataclass
@@ -36,6 +46,7 @@ class LLMResult:
     name_key: str | None = None
     value_format: ValueFormat | None = None
     summary: str = ""
+    drill_down: DrillDownConfig | None = None
 
 
 # SQL validation patterns
@@ -190,12 +201,31 @@ Given a user's natural language query about restaurant analytics, return a JSON 
 7. nameKey: Column name for labels (pie charts)
 8. valueFormat: One of "currency" (for revenue/dollars), "number" (for counts/quantities), "percent" (for percentages)
 9. summary: A 1-2 sentence insight about what the data shows
+10. drillDown: Object for drill-down when user clicks a data point:
+    - enabled: true if clicking should show underlying order details, false otherwise
+    - type: one of "location", "date", "product", "category", "source", "channel" (the dimension to filter by)
+    - column: which result column contains the value to filter by
 
 SQL Rules:
 - Always use the materialized views when possible
 - Convert cents to dollars in the SQL (divide by 100.0)
 - Round dollar amounts to 2 decimal places
 - Use descriptive column aliases
+
+## Drill-Down Guidelines
+
+Enable drill-down when the query groups by a filterable dimension:
+- location → drillDown: { enabled: true, type: "location", column: "location" }
+- date/day → drillDown: { enabled: true, type: "date", column: "date" }
+- product → drillDown: { enabled: true, type: "product", column: "product" }
+- category → drillDown: { enabled: true, type: "category", column: "category" }
+- source → drillDown: { enabled: true, type: "source", column: "source" }
+- channel → drillDown: { enabled: true, type: "channel", column: "channel" }
+
+Disable drill-down for:
+- Single metrics (total revenue, count) → drillDown: { enabled: false }
+- Complex aggregations without clear dimension → drillDown: { enabled: false }
+- Time series (hourly/daily trends) can use date drill-down
 
 ## Handling Non-Analytics Queries
 
@@ -204,6 +234,7 @@ If the user's query is NOT about restaurant analytics (greetings, off-topic ques
 - Set chartType to: "info"
 - Set title to: "Welcome to Restaurant Analytics"
 - Set summary to a helpful message explaining what queries are supported, with 2-3 examples
+- Set drillDown to: { enabled: false }
 
 Return ONLY valid JSON, no markdown code blocks or explanation."""
 
@@ -276,6 +307,26 @@ def _parse_response(text: str) -> LLMResult:
 
     _validate_sql(data["sql"])
 
+    # Parse drill-down config
+    drill_down_data = data.get("drillDown", {})
+    drill_down = None
+    if isinstance(drill_down_data, dict):
+        enabled = drill_down_data.get("enabled", False)
+        dd_type = drill_down_data.get("type")
+        dd_column = drill_down_data.get("column")
+
+        # Validate drill-down type
+        valid_types = {"location", "date", "product", "category", "source", "channel"}
+        if dd_type and dd_type not in valid_types:
+            dd_type = None
+            enabled = False
+
+        drill_down = DrillDownConfig(
+            enabled=enabled,
+            type=dd_type if enabled else None,
+            column=dd_column if enabled else None,
+        )
+
     return LLMResult(
         sql=data["sql"],
         chart_type=chart_type,
@@ -286,6 +337,7 @@ def _parse_response(text: str) -> LLMResult:
         name_key=data.get("nameKey"),
         value_format=data.get("valueFormat"),
         summary=data.get("summary", "Query executed successfully."),
+        drill_down=drill_down,
     )
 
 
@@ -373,6 +425,7 @@ def validate_chart_type(data: list[dict], result: LLMResult) -> LLMResult:
                 name_key=None,
                 value_format=result.value_format,
                 summary=result.summary,
+                drill_down=DrillDownConfig(enabled=False),  # Metrics don't have drill-down
             )
 
     # Time series data → line (unless explicitly table)
@@ -390,6 +443,7 @@ def validate_chart_type(data: list[dict], result: LLMResult) -> LLMResult:
             name_key=None,
             value_format=result.value_format,
             summary=result.summary,
+            drill_down=DrillDownConfig(enabled=True, type="date", column=time_col),
         )
 
     # Too many categories for pie → bar
@@ -404,6 +458,7 @@ def validate_chart_type(data: list[dict], result: LLMResult) -> LLMResult:
             name_key=None,
             value_format=result.value_format,
             summary=result.summary,
+            drill_down=result.drill_down,  # Preserve drill-down
         )
 
     # Many columns → table
@@ -418,6 +473,7 @@ def validate_chart_type(data: list[dict], result: LLMResult) -> LLMResult:
             name_key=None,
             value_format=result.value_format,
             summary=result.summary,
+            drill_down=result.drill_down,  # Preserve drill-down
         )
 
     return result

@@ -10,7 +10,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { ValueFormat, DrillDownFilters } from "@/types";
+import { ValueFormat, DrillDownFilters, DrillDownConfig } from "@/types";
 import {
   getChartColors,
   createFormatter,
@@ -24,6 +24,7 @@ interface LineChartViewProps {
   yAxis: string;
   valueFormat?: ValueFormat;
   isDark: boolean;
+  drillDown?: DrillDownConfig;
   onDataClick?: (filters: DrillDownFilters) => void;
 }
 
@@ -33,6 +34,7 @@ export function LineChartView({
   yAxis,
   valueFormat,
   isDark,
+  drillDown,
   onDataClick,
 }: LineChartViewProps) {
   const colors = getChartColors(isDark);
@@ -40,25 +42,44 @@ export function LineChartView({
   const formatTick = createTickFormatter(valueFormat);
   const unitLabel = getUnitLabel(valueFormat, yAxis);
 
-  // Build drill-down filters from data point
+  // Check if drill-down is enabled
+  const isDrillDownEnabled = drillDown?.enabled && onDataClick;
+
+  // Build drill-down filters from data point using LLM-provided config
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleDotClick = (entry: any) => {
-    if (!onDataClick) return;
-    const filters: DrillDownFilters = {};
-    const xValue = String(entry[xAxis] || entry?.payload?.[xAxis] || "");
+    if (!isDrillDownEnabled || !drillDown?.type || !drillDown?.column) return;
 
-    const xLower = xAxis.toLowerCase();
-    if (xLower.includes("date") || xLower.includes("day")) {
-      filters.date = xValue;
-    } else if (xLower.includes("location")) {
-      filters.location = xValue;
-    } else if (xLower.includes("product")) {
-      filters.product = xValue;
-    } else {
-      filters.date = xValue; // Default to date for line charts
+    const value = entry[drillDown.column] || entry?.payload?.[drillDown.column];
+    if (value === null || value === undefined || value === "") return;
+
+    const filters: DrillDownFilters = {};
+    const strValue = String(value);
+
+    switch (drillDown.type) {
+      case "product":
+        filters.product = strValue;
+        break;
+      case "location":
+        filters.location = strValue;
+        break;
+      case "date":
+        filters.date = strValue;
+        break;
+      case "source":
+        filters.source = strValue;
+        break;
+      case "channel":
+        filters.channel = strValue;
+        break;
+      case "category":
+        filters.category = strValue;
+        break;
     }
 
-    onDataClick(filters);
+    if (Object.keys(filters).length > 0) {
+      onDataClick(filters);
+    }
   };
 
   return (
@@ -117,14 +138,14 @@ export function LineChartView({
             fill: "#3b82f6",
             strokeWidth: 2,
             stroke: colors.dotStroke,
-            cursor: onDataClick ? "pointer" : "default",
+            cursor: isDrillDownEnabled ? "pointer" : "default",
           }}
           activeDot={{
             r: 6,
             fill: "#3b82f6",
             strokeWidth: 2,
             stroke: colors.dotStroke,
-            cursor: onDataClick ? "pointer" : "default",
+            cursor: isDrillDownEnabled ? "pointer" : "default",
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             onClick: (_: any, payload: any) => handleDotClick(payload?.payload || payload),
           }}

@@ -20,6 +20,23 @@ class ValueFormat(str, Enum):
     PERCENT = "percent"
 
 
+class DrillDownType(str, Enum):
+    LOCATION = "location"
+    DATE = "date"
+    PRODUCT = "product"
+    CATEGORY = "category"
+    SOURCE = "source"
+    CHANNEL = "channel"
+
+
+class DrillDownConfig(BaseModel):
+    """Configuration for drill-down functionality."""
+
+    enabled: bool
+    type: DrillDownType | None = None
+    column: str | None = None
+
+
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=1000)
 
@@ -38,6 +55,7 @@ class QueryResponse(BaseModel):
     summary: str
     data: list[dict[str, Any]]
     data_range: str = Field(alias="dataRange")
+    drill_down: DrillDownConfig | None = Field(default=None, alias="drillDown")
 
     class Config:
         populate_by_name = True

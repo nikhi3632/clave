@@ -66,6 +66,7 @@ export function useQuery(): UseQueryReturn {
         summary: successResult.summary,
         sql: successResult.sql,
         dataRange: successResult.dataRange,
+        drillDown: successResult.drillDown,
       };
 
       setWidgets((prev) => [newWidget, ...prev]);

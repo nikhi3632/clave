@@ -52,6 +52,7 @@ export function Widget({ widget, onRemove }: WidgetProps) {
           nameKey={widget.nameKey}
           valueFormat={widget.valueFormat}
           summary={widget.summary}
+          drillDown={widget.drillDown}
           onDataClick={setDrillDownFilters}
         />
       </CardContent>

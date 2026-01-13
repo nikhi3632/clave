@@ -54,6 +54,15 @@ async def query(request: QueryRequest):
     # Validate and potentially correct chart type based on actual result shape
     validated_result = validate_chart_type(data, llm_result)
 
+    # Build drill-down config for response
+    drill_down = None
+    if validated_result.drill_down:
+        drill_down = {
+            "enabled": validated_result.drill_down.enabled,
+            "type": validated_result.drill_down.type,
+            "column": validated_result.drill_down.column,
+        }
+
     return {
         "success": True,
         "query": user_query,
@@ -68,4 +77,5 @@ async def query(request: QueryRequest):
         "summary": validated_result.summary,
         "data": data,
         "dataRange": date_range.formatted,
+        "drillDown": drill_down,
     }

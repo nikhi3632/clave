@@ -1,7 +1,7 @@
 "use client";
 
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { ValueFormat, DrillDownFilters } from "@/types";
+import { ValueFormat, DrillDownFilters, DrillDownConfig } from "@/types";
 import { CHART_COLORS, getChartColors, createFormatter } from "./chartTheme";
 
 interface PieChartViewProps {
@@ -10,6 +10,7 @@ interface PieChartViewProps {
   nameKey: string;
   valueFormat?: ValueFormat;
   isDark: boolean;
+  drillDown?: DrillDownConfig;
   onDataClick?: (filters: DrillDownFilters) => void;
 }
 
@@ -19,6 +20,7 @@ export function PieChartView({
   nameKey,
   valueFormat,
   isDark,
+  drillDown,
   onDataClick,
 }: PieChartViewProps) {
   const colors = getChartColors(isDark);
@@ -30,31 +32,44 @@ export function PieChartView({
     return value !== null && value !== undefined && value !== "";
   });
 
-  // Build drill-down filters from pie segment
+  // Check if drill-down is enabled
+  const isDrillDownEnabled = drillDown?.enabled && onDataClick;
+
+  // Build drill-down filters from pie segment using LLM-provided config
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleSegmentClick = (entry: any) => {
-    if (!onDataClick) return;
-    const filters: DrillDownFilters = {};
-    const nameValue = String(entry[nameKey] || entry?.payload?.[nameKey] || entry?.name || "");
+    if (!isDrillDownEnabled || !drillDown?.type || !drillDown?.column) return;
 
-    const nameLower = nameKey.toLowerCase();
-    if (nameLower.includes("product") || nameLower === "name") {
-      filters.product = nameValue;
-    } else if (nameLower.includes("location")) {
-      filters.location = nameValue;
-    } else if (nameLower.includes("source")) {
-      filters.source = nameValue;
-    } else if (nameLower.includes("channel")) {
-      filters.channel = nameValue;
-    } else if (nameLower.includes("payment")) {
-      filters.payment_type = nameValue;
-    } else if (nameLower.includes("category")) {
-      filters.category = nameValue;
-    } else {
-      filters.product = nameValue;
+    const value = entry[drillDown.column] || entry?.payload?.[drillDown.column] || entry?.name;
+    if (value === null || value === undefined || value === "") return;
+
+    const filters: DrillDownFilters = {};
+    const strValue = String(value);
+
+    switch (drillDown.type) {
+      case "product":
+        filters.product = strValue;
+        break;
+      case "location":
+        filters.location = strValue;
+        break;
+      case "date":
+        filters.date = strValue;
+        break;
+      case "source":
+        filters.source = strValue;
+        break;
+      case "channel":
+        filters.channel = strValue;
+        break;
+      case "category":
+        filters.category = strValue;
+        break;
     }
 
-    onDataClick(filters);
+    if (Object.keys(filters).length > 0) {
+      onDataClick(filters);
+    }
   };
 
   return (
@@ -72,13 +87,13 @@ export function PieChartView({
           label={({ name, percent }) => `${name} (${((percent ?? 0) * 100).toFixed(0)}%)`}
           labelLine={{ stroke: colors.legendText, strokeWidth: 1 }}
           onClick={(entry) => handleSegmentClick(entry)}
-          style={{ cursor: onDataClick ? "pointer" : "default" }}
+          style={{ cursor: isDrillDownEnabled ? "pointer" : "default" }}
         >
           {filteredData.map((_, index) => (
             <Cell
               key={`cell-${index}`}
               fill={CHART_COLORS[index % CHART_COLORS.length]}
-              className={onDataClick ? "hover:opacity-80" : ""}
+              className={isDrillDownEnabled ? "hover:opacity-80" : ""}
             />
           ))}
         </Pie>

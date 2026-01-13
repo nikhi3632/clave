@@ -22,11 +22,8 @@ class Channel(str, Enum):
     DELIVERY = "delivery"
 
 
-class Location(str, Enum):
-    DOWNTOWN = "Downtown"
-    AIRPORT = "Airport"
-    MALL = "Mall"
-    UNIVERSITY = "University"
+# Location is now dynamic - extracted from source data during ETL
+# No hardcoded enum; locations are created in DB from source files
 
 
 # =============================================================================
@@ -66,7 +63,7 @@ class Order(BaseModel):
 
     external_id: str = Field(min_length=1)
     source: Source
-    location: Location
+    location: str = Field(min_length=1)  # Dynamic location name from source data
     channel: Channel
     # Financial fields
     subtotal_cents: int = Field(ge=0)

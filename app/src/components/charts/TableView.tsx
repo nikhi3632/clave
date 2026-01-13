@@ -1,42 +1,53 @@
 "use client";
 
-import { ValueFormat, DrillDownFilters } from "@/types";
+import { ValueFormat, DrillDownFilters, DrillDownConfig } from "@/types";
 import { createFormatter } from "./chartTheme";
 import { tableViewStyles as styles } from "@/styles/charts/table";
 
 interface TableViewProps {
   data: Record<string, unknown>[];
   valueFormat?: ValueFormat;
+  drillDown?: DrillDownConfig;
   onDataClick?: (filters: DrillDownFilters) => void;
 }
 
-export function TableView({ data, valueFormat, onDataClick }: TableViewProps) {
+export function TableView({ data, valueFormat, drillDown, onDataClick }: TableViewProps) {
   const columns = Object.keys(data[0] || {});
 
+  // Check if drill-down is enabled
+  const isDrillDownEnabled = drillDown?.enabled && onDataClick;
+
   const handleRowClick = (row: Record<string, unknown>) => {
-    if (!onDataClick) return;
+    if (!isDrillDownEnabled || !drillDown?.type || !drillDown?.column) return;
+
+    const value = row[drillDown.column];
+    if (value === null || value === undefined || value === "") return;
+
     const filters: DrillDownFilters = {};
+    const strValue = String(value);
 
-    for (const [key, value] of Object.entries(row)) {
-      if (value === null || value === undefined || value === "") continue;
-
-      const keyLower = key.toLowerCase();
-      const strValue = String(value);
-
-      if (keyLower.includes("product") || keyLower === "name" || keyLower === "canonical_name") {
+    switch (drillDown.type) {
+      case "product":
         filters.product = strValue;
-      } else if (keyLower.includes("location")) {
+        break;
+      case "location":
         filters.location = strValue;
-      } else if (keyLower.includes("date")) {
+        break;
+      case "date":
         filters.date = strValue;
-      } else if (keyLower === "source") {
+        break;
+      case "source":
         filters.source = strValue;
-      } else if (keyLower === "channel") {
+        break;
+      case "channel":
         filters.channel = strValue;
-      }
+        break;
+      case "category":
+        filters.category = strValue;
+        break;
     }
 
-    if (Object.keys(filters).length > 0 && Object.values(filters).some(v => v)) {
+    if (Object.keys(filters).length > 0) {
       onDataClick(filters);
     }
   };
@@ -57,7 +68,7 @@ export function TableView({ data, valueFormat, onDataClick }: TableViewProps) {
           {data.map((row, i) => (
             <tr
               key={i}
-              className={onDataClick ? styles.trClickable : styles.tr}
+              className={isDrillDownEnabled ? styles.trClickable : styles.tr}
               onClick={() => handleRowClick(row)}
             >
               {columns.map((col) => {
