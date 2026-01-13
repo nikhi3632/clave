@@ -25,6 +25,19 @@ SELECT
     (SELECT COALESCE(SUM(total_cents), 0) FROM orders WHERE source = 'square') as square_revenue_cents,
     -- Data quality
     (SELECT COUNT(*) FROM products WHERE category IS NULL) as products_without_category,
+    -- Errors: serious data integrity issues
+    (
+        (SELECT COUNT(*) FROM orders WHERE total_cents < 0) +
+        (SELECT COUNT(*) FROM order_items WHERE quantity <= 0) +
+        (SELECT COUNT(*) FROM order_items oi WHERE NOT EXISTS (SELECT 1 FROM products p WHERE p.id = oi.product_id)) +
+        (SELECT COUNT(*) FROM orders o WHERE NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id = o.id))
+    ) as error_count,
+    -- Warnings: potential issues worth reviewing
+    (
+        (SELECT COUNT(*) FROM orders WHERE total_cents = 0 AND voided = FALSE AND deleted = FALSE) +
+        (SELECT COUNT(*) FROM products p WHERE NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.product_id = p.id)) +
+        (SELECT COUNT(*) FROM orders WHERE voided = TRUE OR deleted = TRUE)
+    ) as warning_count,
     -- Last updated
     NOW() as refreshed_at;
 
