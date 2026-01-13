@@ -39,10 +39,6 @@ def get_supabase_client() -> Client:
     return create_client(settings.supabase_url, settings.supabase_anon_key)
 
 
-MAX_RETRIES = 2
-RETRY_DELAY = 0.5
-
-
 async def execute_query(sql: str, retry_count: int = 0) -> list[dict[str, Any]]:
     """Execute a read-only SQL query with validation and retry logic."""
     # Validate SQL
@@ -67,9 +63,10 @@ async def execute_query(sql: str, retry_count: int = 0) -> list[dict[str, Any]]:
         error_msg = str(e).lower()
 
         # Connection errors are retryable
+        settings = get_settings()
         if "connection" in error_msg or "timeout" in error_msg or "network" in error_msg:
-            if retry_count < MAX_RETRIES:
-                await asyncio.sleep(RETRY_DELAY * (retry_count + 1))
+            if retry_count < settings.db_max_retries:
+                await asyncio.sleep(settings.db_retry_delay * (retry_count + 1))
                 return await execute_query(sql, retry_count + 1)
             raise DatabaseError(
                 "Unable to connect to database. Please try again.",
@@ -116,7 +113,6 @@ class DataDateRange:
 
 # Cache for date range
 _date_range_cache: dict[str, tuple[DataDateRange, float]] = {}
-DATE_RANGE_CACHE_TTL = 300  # 5 minutes
 
 
 def _format_date_range(min_date: str, max_date: str) -> str:
@@ -146,9 +142,10 @@ async def get_data_date_range() -> DataDateRange:
     """Get the actual date range of available data."""
     cache_key = "date_range"
 
+    settings = get_settings()
     if cache_key in _date_range_cache:
         cached, cached_at = _date_range_cache[cache_key]
-        if time.time() - cached_at < DATE_RANGE_CACHE_TTL:
+        if time.time() - cached_at < settings.date_range_cache_ttl:
             return cached
 
     try:
@@ -167,8 +164,8 @@ async def get_data_date_range() -> DataDateRange:
             _date_range_cache[cache_key] = (date_range, time.time())
             return date_range
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to fetch date range, using fallback: {e}")
 
     # Fallback
     return DataDateRange(
@@ -196,16 +193,16 @@ class SchemaInfo:
 
 # Cache for schema info
 _schema_cache: dict[str, tuple[SchemaInfo, float]] = {}
-SCHEMA_CACHE_TTL = 600  # 10 minutes
 
 
 async def get_schema_info() -> SchemaInfo:
     """Get dynamic schema information from the database."""
     cache_key = "schema"
+    settings = get_settings()
 
     if cache_key in _schema_cache:
         cached, cached_at = _schema_cache[cache_key]
-        if time.time() - cached_at < SCHEMA_CACHE_TTL:
+        if time.time() - cached_at < settings.schema_cache_ttl:
             return cached
 
     client = get_supabase_client()

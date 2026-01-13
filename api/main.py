@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -7,17 +8,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import get_settings
 from routers import drill_down_router, query_router
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     # Startup
     settings = get_settings()
-    print(f"Starting API server (debug={settings.debug})")
-    print(f"CORS origins: {settings.cors_origin_list}")
+    logger.info(f"Starting API server (debug={settings.debug})")
+    logger.info(f"CORS origins: {settings.cors_origin_list}")
     yield
     # Shutdown
-    print("Shutting down API server")
+    logger.info("Shutting down API server")
 
 
 app = FastAPI(

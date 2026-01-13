@@ -248,10 +248,6 @@ def build_system_prompt(schema: SchemaInfo) -> str:
     return f"{schema_context}\n{CHART_SELECTION_GUIDELINES}\n{TASK_PROMPT}"
 
 
-MAX_RETRIES = 3
-INITIAL_RETRY_DELAY = 1.0
-
-
 def _get_current_date_context() -> str:
     """Get current date in readable format."""
     return datetime.now().strftime("%A, %B %d, %Y")
@@ -396,8 +392,8 @@ Return the JSON object with sql, chartType, title, xAxis/yAxis or dataKey/nameKe
         return content.text
 
     except anthropic.RateLimitError:
-        if retry_count < MAX_RETRIES:
-            delay = INITIAL_RETRY_DELAY * (2**retry_count)
+        if retry_count < settings.llm_max_retries:
+            delay = settings.llm_initial_retry_delay * (2**retry_count)
             await asyncio.sleep(delay)
             return await _call_llm_with_retry(user_query, retry_count + 1)
         raise LLMError("Rate limit exceeded, please try again later", "RATE_LIMIT", False)
@@ -405,8 +401,8 @@ Return the JSON object with sql, chartType, title, xAxis/yAxis or dataKey/nameKe
     except anthropic.APIStatusError as e:
         logger.error(f"Anthropic API error {e.status_code}: {e.message}")
         is_retryable = e.status_code >= 500 or e.status_code == 429
-        if is_retryable and retry_count < MAX_RETRIES:
-            delay = INITIAL_RETRY_DELAY * (2**retry_count)
+        if is_retryable and retry_count < settings.llm_max_retries:
+            delay = settings.llm_initial_retry_delay * (2**retry_count)
             await asyncio.sleep(delay)
             return await _call_llm_with_retry(user_query, retry_count + 1)
         raise LLMError(

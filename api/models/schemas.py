@@ -67,6 +67,8 @@ class DrillDownParams(BaseModel):
     date: str | None = None
     source: str | None = None
     channel: str | None = None
+    payment_type: str | None = None
+    category: str | None = None
     limit: int = Field(default=50, ge=1, le=500)
 
 

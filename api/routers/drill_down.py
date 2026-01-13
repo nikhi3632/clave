@@ -3,14 +3,12 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query
 
+from config import get_settings
 from services import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["drill-down"])
-
-# Drill-down query timeout
-DRILL_DOWN_TIMEOUT_SECONDS = 15
 
 
 def _fetch_drill_down_data_sync(
@@ -158,6 +156,8 @@ async def drill_down(
             },
         )
 
+    settings = get_settings()
+
     try:
         # Run sync DB call in thread pool with timeout
         result = await asyncio.wait_for(
@@ -172,12 +172,12 @@ async def drill_down(
                 category,
                 limit,
             ),
-            timeout=DRILL_DOWN_TIMEOUT_SECONDS,
+            timeout=settings.drill_down_timeout,
         )
         return result
 
     except asyncio.TimeoutError:
-        logger.error(f"Drill-down timed out after {DRILL_DOWN_TIMEOUT_SECONDS}s")
+        logger.error(f"Drill-down timed out after {settings.drill_down_timeout}s")
         raise HTTPException(
             status_code=504,
             detail={

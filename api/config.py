@@ -20,6 +20,20 @@ class Settings(BaseSettings):
     # Server
     debug: bool = False
 
+    # Timeouts (seconds)
+    api_timeout: int = 30
+    drill_down_timeout: int = 15
+
+    # Cache TTLs (seconds)
+    date_range_cache_ttl: int = 300  # 5 minutes
+    schema_cache_ttl: int = 600  # 10 minutes
+
+    # Retry settings
+    db_max_retries: int = 2
+    db_retry_delay: float = 0.5
+    llm_max_retries: int = 3
+    llm_initial_retry_delay: float = 1.0
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

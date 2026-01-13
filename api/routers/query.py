@@ -4,6 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
+from config import get_settings
 from models import ErrorResponse, HealthResponse, QueryRequest, QueryResponse
 from services import (
     DatabaseError,
@@ -17,9 +18,6 @@ from services import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["query"])
-
-# API-level timeout (LLM + DB combined)
-API_TIMEOUT_SECONDS = 30
 
 
 @router.get("/query", response_model=HealthResponse)
@@ -75,17 +73,18 @@ async def _process_query_internal(user_query: str) -> dict:
 async def query(request: QueryRequest):
     """Process a natural language query and return SQL + visualization data."""
     user_query = request.query.strip()
+    settings = get_settings()
 
     try:
         # Wrap entire processing in a timeout
         result = await asyncio.wait_for(
             _process_query_internal(user_query),
-            timeout=API_TIMEOUT_SECONDS,
+            timeout=settings.api_timeout,
         )
         return result
 
     except asyncio.TimeoutError:
-        logger.error(f"Query timed out after {API_TIMEOUT_SECONDS}s: {user_query[:100]}")
+        logger.error(f"Query timed out after {settings.api_timeout}s: {user_query[:100]}")
         raise HTTPException(
             status_code=504,
             detail={
@@ -101,8 +100,7 @@ async def query(request: QueryRequest):
             detail={"error": str(e), "code": e.code, "retryable": e.retryable},
         )
     except DatabaseError as e:
-        status_code = 503 if e.code == "CONFIG_ERROR" else 500
         raise HTTPException(
-            status_code=status_code,
+            status_code=500,
             detail={"error": str(e), "code": e.code, "retryable": e.retryable},
         )

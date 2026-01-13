@@ -135,15 +135,13 @@ export function DrillDownModal({ filters, onClose }: DrillDownModalProps) {
         const data = await response.json();
 
         if (!response.ok) {
-          console.error("Drill-down error:", data);
-          setError(data.error || "Failed to fetch data");
+          setError(data.detail?.error || data.error || "Failed to fetch data");
           return;
         }
 
         setOrders(data.orders || []);
         setSummary(data.summary || null);
-      } catch (err) {
-        console.error("Drill-down fetch error:", err);
+      } catch {
         setError("Failed to fetch order details");
       } finally {
         setIsLoading(false);
