@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
@@ -12,7 +14,12 @@ from services import (
     validate_chart_type,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api", tags=["query"])
+
+# API-level timeout (LLM + DB combined)
+API_TIMEOUT_SECONDS = 30
 
 
 @router.get("/query", response_model=HealthResponse)
@@ -21,35 +28,14 @@ async def health_check():
     return HealthResponse(status="ok", timestamp=datetime.now())
 
 
-@router.post(
-    "/query",
-    response_model=QueryResponse,
-    responses={400: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
-)
-async def query(request: QueryRequest):
-    """Process a natural language query and return SQL + visualization data."""
-    user_query = request.query.strip()
-
+async def _process_query_internal(user_query: str) -> dict:
+    """Internal query processing with LLM and database calls."""
     # Process with LLM
-    try:
-        llm_result = await process_query(user_query)
-    except LLMError as e:
-        status_code = 400 if e.code == "INVALID_INPUT" else 503
-        raise HTTPException(
-            status_code=status_code,
-            detail={"error": str(e), "code": e.code, "retryable": e.retryable},
-        )
+    llm_result = await process_query(user_query)
 
     # Execute SQL and get date range
-    try:
-        data = await execute_query(llm_result.sql)
-        date_range = await get_data_date_range()
-    except DatabaseError as e:
-        status_code = 503 if e.code == "CONFIG_ERROR" else 500
-        raise HTTPException(
-            status_code=status_code,
-            detail={"error": str(e), "code": e.code, "retryable": e.retryable},
-        )
+    data = await execute_query(llm_result.sql)
+    date_range = await get_data_date_range()
 
     # Validate and potentially correct chart type based on actual result shape
     validated_result = validate_chart_type(data, llm_result)
@@ -79,3 +65,44 @@ async def query(request: QueryRequest):
         "dataRange": date_range.formatted,
         "drillDown": drill_down,
     }
+
+
+@router.post(
+    "/query",
+    response_model=QueryResponse,
+    responses={400: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+)
+async def query(request: QueryRequest):
+    """Process a natural language query and return SQL + visualization data."""
+    user_query = request.query.strip()
+
+    try:
+        # Wrap entire processing in a timeout
+        result = await asyncio.wait_for(
+            _process_query_internal(user_query),
+            timeout=API_TIMEOUT_SECONDS,
+        )
+        return result
+
+    except asyncio.TimeoutError:
+        logger.error(f"Query timed out after {API_TIMEOUT_SECONDS}s: {user_query[:100]}")
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "error": "Request timed out. Please try a simpler query.",
+                "code": "TIMEOUT",
+                "retryable": True,
+            },
+        )
+    except LLMError as e:
+        status_code = 400 if e.code == "INVALID_INPUT" else 503
+        raise HTTPException(
+            status_code=status_code,
+            detail={"error": str(e), "code": e.code, "retryable": e.retryable},
+        )
+    except DatabaseError as e:
+        status_code = 503 if e.code == "CONFIG_ERROR" else 500
+        raise HTTPException(
+            status_code=status_code,
+            detail={"error": str(e), "code": e.code, "retryable": e.retryable},
+        )
