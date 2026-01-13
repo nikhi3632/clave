@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -8,6 +9,8 @@ from typing import Any
 from supabase import Client, create_client
 
 from config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class DatabaseError(Exception):
@@ -88,13 +91,20 @@ async def execute_query(sql: str, retry_count: int = 0) -> list[dict[str, Any]]:
 
         # Column/table not found
         if "does not exist" in error_msg or "not found" in error_msg:
+            logger.error(f"Invalid reference in query: {e}")
             raise DatabaseError(
-                "Query references invalid table or column. Please try a different question.",
+                "Query references invalid data. Please try a different question.",
                 "INVALID_REFERENCE",
                 False,
             )
 
-        raise DatabaseError(f"Query failed: {e}", "QUERY_ERROR", False)
+        # Log the raw error for debugging, return friendly message
+        logger.error(f"Database query failed: {e}")
+        raise DatabaseError(
+            "Unable to execute query. Please try again or rephrase your question.",
+            "QUERY_ERROR",
+            True,
+        )
 
 
 @dataclass

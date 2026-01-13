@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,6 +11,8 @@ import anthropic
 from config import get_settings
 
 from .database import SchemaInfo, get_schema_info
+
+logger = logging.getLogger(__name__)
 
 
 class LLMError(Exception):
@@ -278,29 +281,46 @@ def _parse_response(text: str) -> LLMResult:
 
     try:
         data = json.loads(clean_text)
-    except json.JSONDecodeError:
-        raise LLMError(f"Failed to parse AI response: {text[:100]}...", "PARSE_ERROR", True)
+    except json.JSONDecodeError as e:
+        logger.error(f"LLM parse error: {e}. Response: {text[:200]}")
+        raise LLMError(
+            "Couldn't process that query. Please try rephrasing your question.",
+            "PARSE_ERROR",
+            True,
+        )
 
     if not data.get("sql") or not isinstance(data["sql"], str):
-        raise LLMError("Invalid response: missing SQL query", "INVALID_RESPONSE", True)
+        logger.error(f"LLM response missing SQL: {data}")
+        raise LLMError(
+            "Couldn't generate a query. Please try rephrasing your question.",
+            "INVALID_RESPONSE",
+            True,
+        )
 
     chart_type = data.get("chartType")
     if chart_type not in ["bar", "line", "pie", "table", "metric", "info"]:
-        raise LLMError("Invalid response: invalid chart type", "INVALID_RESPONSE", True)
+        logger.error(f"LLM returned invalid chart type: {chart_type}")
+        raise LLMError(
+            "Couldn't determine how to display the results. Please try again.",
+            "INVALID_RESPONSE",
+            True,
+        )
 
     # Validate chart-specific fields
     if chart_type in ["bar", "line"]:
         if not data.get("xAxis") or not data.get("yAxis"):
+            logger.error(f"LLM {chart_type} chart missing axes: {data}")
             raise LLMError(
-                f"Invalid response: {chart_type} chart requires xAxis and yAxis",
+                "Couldn't configure the chart. Please try rephrasing your question.",
                 "INVALID_RESPONSE",
                 True,
             )
 
     if chart_type == "pie":
         if not data.get("dataKey") or not data.get("nameKey"):
+            logger.error(f"LLM pie chart missing keys: {data}")
             raise LLMError(
-                "Invalid response: pie chart requires dataKey and nameKey",
+                "Couldn't configure the chart. Please try rephrasing your question.",
                 "INVALID_RESPONSE",
                 True,
             )
@@ -383,15 +403,25 @@ Return the JSON object with sql, chartType, title, xAxis/yAxis or dataKey/nameKe
         raise LLMError("Rate limit exceeded, please try again later", "RATE_LIMIT", False)
 
     except anthropic.APIStatusError as e:
+        logger.error(f"Anthropic API error {e.status_code}: {e.message}")
         is_retryable = e.status_code >= 500 or e.status_code == 429
         if is_retryable and retry_count < MAX_RETRIES:
             delay = INITIAL_RETRY_DELAY * (2**retry_count)
             await asyncio.sleep(delay)
             return await _call_llm_with_retry(user_query, retry_count + 1)
-        raise LLMError(f"AI service error: {e.message}", f"API_ERROR_{e.status_code}", False)
+        raise LLMError(
+            "AI service is temporarily unavailable. Please try again.",
+            f"API_ERROR_{e.status_code}",
+            True,
+        )
 
-    except anthropic.AuthenticationError:
-        raise LLMError("AI service authentication failed", "AUTH_ERROR", False)
+    except anthropic.AuthenticationError as e:
+        logger.error(f"Anthropic auth error: {e}")
+        raise LLMError(
+            "Service configuration error. Please contact support.",
+            "AUTH_ERROR",
+            False,
+        )
 
 
 def validate_chart_type(data: list[dict], result: LLMResult) -> LLMResult:
