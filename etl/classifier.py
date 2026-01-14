@@ -297,6 +297,8 @@ class CategoryClassifier:
                         reason=llm_result.reason,
                     )
                     self._pending_classifications[name] = category
+                    # Add to known categories so next batch sees it
+                    self._known_categories.add(category)
                     classified += 1
 
             except Exception as e:
@@ -794,25 +796,25 @@ Example:
             logger.debug(f"Response was: {content}")
             return {}
 
-    def get_canonical_name(self, original_name: str) -> str:
+    def get_canonical_name(self, original_name: str) -> str | None:
         """
-        Get the canonical name for a product.
+        Get the canonical name for a product from cache.
 
         Args:
             original_name: Original product name.
 
         Returns:
-            Canonical name (or original if not found).
+            Canonical name if in cache, None if not cached.
         """
         if not original_name:
-            return original_name
+            return None
 
         name_lower = original_name.lower()
         if name_lower in self._cache:
             return self._cache[name_lower].canonical_name
 
-        # Not in cache, return original
-        return original_name
+        # Not in cache
+        return None
 
     def save_cache(self) -> int:
         """Save new mappings to database."""

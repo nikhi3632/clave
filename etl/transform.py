@@ -190,12 +190,11 @@ class Transformer:
         # (e.g., "Margarita" cocktail vs "Margherita Pizza")
         llm_canonical = None
         if self.product_name_classifier:
+            # Returns None if not in cache, canonical name if cached
+            # Even identity mappings like "Margarita" → "Margarita" are authoritative
             llm_canonical = self.product_name_classifier.get_canonical_name(original_name)
-            # Only use if it's different from original (meaning LLM has a mapping)
-            if llm_canonical == original_name:
-                llm_canonical = None
 
-        if llm_canonical:
+        if llm_canonical is not None:
             # Use LLM's authoritative canonical name
             canonical = llm_canonical
             confidence = 1.0
@@ -331,11 +330,12 @@ class Transformer:
 
         for old_canonical, product in self.products_seen.items():
             # Get LLM canonical name for this product's original names
-            # Use the first original name to get the canonical
+            # Check if any original name maps to a DIFFERENT canonical than current
             llm_canonical = old_canonical
             for orig_name in product.original_names:
                 llm_name = self.product_name_classifier.get_canonical_name(orig_name)
-                if llm_name and llm_name != orig_name:
+                # If LLM has a mapping and it differs from current canonical, use it
+                if llm_name is not None and llm_name != old_canonical:
                     llm_canonical = llm_name
                     break
 
