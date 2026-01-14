@@ -271,6 +271,121 @@ def apply_merge(client, item: dict, canonical: str) -> None:
     }).eq("id", item["id"]).execute()
 
 
+def browse_products(client) -> None:
+    """Browse and edit any product's category."""
+    # Get all products grouped by category
+    result = client.table("products").select("canonical_name,category").order("category,canonical_name").execute()
+    products = result.data or []
+
+    if not products:
+        print("\nNo products found!")
+        return
+
+    # Group by category
+    by_category: dict[str, list[str]] = {}
+    for p in products:
+        cat = p["category"] or "(Uncategorized)"
+        if cat not in by_category:
+            by_category[cat] = []
+        by_category[cat].append(p["canonical_name"])
+
+    # Build flat list for selection
+    flat_list: list[tuple[str, str]] = []  # (product_name, category)
+
+    print(f"\n{'='*60}")
+    print(f"ALL PRODUCTS BY CATEGORY ({len(products)} total)")
+    print(f"{'='*60}\n")
+
+    idx = 1
+    for cat in sorted(by_category.keys()):
+        prods = by_category[cat]
+        print(f"{cat} ({len(prods)}):")
+        for prod in prods:
+            print(f"  {idx}. {prod}")
+            flat_list.append((prod, cat))
+            idx += 1
+        print()
+
+    print("Enter product number to change category, or [q] to quit:")
+
+    while True:
+        choice = input("\nProduct #: ").strip().lower()
+
+        if choice == "q":
+            return
+
+        if choice.isdigit():
+            num = int(choice)
+            if 1 <= num <= len(flat_list):
+                prod_name, current_cat = flat_list[num - 1]
+                edit_product_category(client, prod_name, current_cat)
+                # Refresh and continue
+                print("\nEnter another product # or [q] to quit:")
+                continue
+
+        print("Invalid choice. Enter a number or 'q'.")
+
+
+def edit_product_category(client, product_name: str, current_category: str) -> None:
+    """Edit a single product's category."""
+    known_categories = get_known_categories(client)
+
+    print(f"\n{'─'*50}")
+    print(f"Product: {product_name}")
+    print(f"Current: {current_category}")
+    print(f"{'─'*50}")
+
+    print("\nOptions:")
+    for i, cat in enumerate(known_categories, 1):
+        marker = " <--" if cat == current_category else ""
+        print(f"  [{i}] {cat}{marker}")
+    print("  [c] Enter custom category")
+    print("  [s] Skip (no change)")
+
+    while True:
+        choice = input("\nChoice: ").strip().lower()
+
+        if choice == "s":
+            print("  Skipped")
+            return
+
+        if choice == "c":
+            custom = input("  Enter category name: ").strip()
+            if custom:
+                update_product_category(client, product_name, custom)
+                print(f"  ✓ Changed to: {custom}")
+                return
+            print("  Category cannot be empty!")
+            continue
+
+        if choice.isdigit():
+            idx = int(choice)
+            if 1 <= idx <= len(known_categories):
+                new_cat = known_categories[idx - 1]
+                if new_cat == current_category:
+                    print("  Already in that category!")
+                    continue
+                update_product_category(client, product_name, new_cat)
+                print(f"  ✓ Changed to: {new_cat}")
+                return
+
+        print("  Invalid choice, try again.")
+
+
+def update_product_category(client, product_name: str, new_category: str) -> None:
+    """Update a product's category in all relevant tables."""
+    # Update products table
+    client.table("products").update({
+        "category": new_category,
+    }).eq("canonical_name", product_name).execute()
+
+    # Update cache if exists
+    client.table("product_category_cache").update({
+        "category": new_category,
+        "confidence": "manual",
+    }).eq("product_name", product_name).execute()
+
+
 def show_stats(client) -> None:
     """Show review statistics."""
     # Get product review counts by status
@@ -333,23 +448,17 @@ def main():
 
     client = get_client()
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--stats":
-        show_stats(client)
-        return
-
-    # Check for category merges first
-    merges = show_pending_merges(client)
-    products = show_pending(client)
-
-    if not merges and not products:
+    # Parse args
+    if "--stats" in sys.argv:
         show_stats(client)
         return
 
     total_reviewed = 0
 
-    # Review category merges first (affects product categories)
+    # 1. Check for category merges first
+    merges = show_pending_merges(client)
     if merges:
-        print("\nReview category merges first? [y/n]: ", end="")
+        print("\nReview category merges? [y/n]: ", end="")
         if input().strip().lower() == "y":
             for item in merges:
                 result = review_merge(client, item)
@@ -361,19 +470,30 @@ def main():
                 if result:
                     total_reviewed += 1
 
-    # Then review product categories
+    # 2. Review pending LLM suggestions
+    products = show_pending(client)
     if products:
-        print("\nReview product categories? [y/n]: ", end="")
+        print("\nReview pending items? [y/n]: ", end="")
         if input().strip().lower() == "y":
             for item in products:
                 result = review_item(client, item)
                 if result is None:  # Quit
-                    break
+                    print(f"\n{'='*40}")
+                    print(f"Reviewed {total_reviewed} items total")
+                    show_stats(client)
+                    return
                 if result:
                     total_reviewed += 1
 
+    # 3. Offer to browse all products
+    print("\nBrowse all products to edit categories? [y/n]: ", end="")
+    if input().strip().lower() == "y":
+        browse_products(client)
+
+    # 4. Show stats
     print(f"\n{'='*40}")
-    print(f"Reviewed {total_reviewed} items total")
+    if total_reviewed:
+        print(f"Reviewed {total_reviewed} items")
     show_stats(client)
 
 
