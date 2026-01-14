@@ -232,7 +232,8 @@ NOTE: Use this in summarySQL - equivalent to sales_cents in views';
 
 COMMENT ON COLUMN orders.total_cents IS
 'Order total in cents (sales + tax + tips). Generated column.
-SYNONYMS: total collected, proceeds';
+SYNONYMS: total collected, proceeds, ticket, check
+NOTE: Use for AOV (Average Order Value) - what customer actually pays';
 
 COMMENT ON COLUMN orders.tax_cents IS
 'Tax amount in cents.';
