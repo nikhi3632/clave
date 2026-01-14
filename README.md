@@ -557,13 +557,7 @@ Charts support click-through exploration:
 ### Query Input
 
 - Natural language text input
-- Quick-query example buttons with icons:
-  - "Total sales" / "Total proceeds" (Dollar icon)
-  - "Sales by location" (Location icon)
-  - "AOV by channel" / "AOV by POS System" (Bar chart icon)
-  - "Hourly sales trend" (Clock icon)
-  - "Channel breakdown" (Pie icon)
-  - "All products with sales" (Table icon)
+- Quick-query example buttons: Total sales, Total proceeds, Sales by location, AOV by channel, AOV by POS System, Hourly sales trend, Channel breakdown, All products with sales
 - Loading state with spinner
 
 ### Chart Types

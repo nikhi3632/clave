@@ -2,17 +2,7 @@
 
 import { useState } from "react";
 import { Card } from "./ui/Card";
-import {
-  QuestionIcon,
-  LightningIcon,
-  Spinner,
-  DollarIcon,
-  LocationIcon,
-  ClockIcon,
-  PieChartIcon,
-  TableIcon,
-  BarChartIcon,
-} from "./ui/Icon";
+import { QuestionIcon, LightningIcon, Spinner } from "./ui/Icon";
 import { queryInputStyles as styles } from "@/styles/queryInput";
 
 interface QueryInputProps {
@@ -21,14 +11,14 @@ interface QueryInputProps {
 }
 
 const EXAMPLE_QUERIES = [
-  { text: "Total sales", icon: DollarIcon },
-  { text: "Total proceeds", icon: DollarIcon },
-  { text: "Sales by location", icon: LocationIcon },
-  { text: "AOV by channel", icon: BarChartIcon },
-  { text: "AOV by POS System", icon: BarChartIcon },
-  { text: "Hourly sales trend", icon: ClockIcon },
-  { text: "Channel breakdown", icon: PieChartIcon },
-  { text: "All products with sales", icon: TableIcon },
+  "Total sales",
+  "Total proceeds",
+  "Sales by location",
+  "AOV by channel",
+  "AOV by POS System",
+  "Hourly sales trend",
+  "Channel breakdown",
+  "All products with sales",
 ];
 
 export function QueryInput({ onSubmit, isLoading }: QueryInputProps) {
@@ -80,20 +70,16 @@ export function QueryInput({ onSubmit, isLoading }: QueryInputProps) {
 
         <div className={styles.examplesWrapper}>
           <span className={styles.examplesLabel}>Try:</span>
-          {EXAMPLE_QUERIES.map((example) => {
-            const Icon = example.icon;
-            return (
-              <button
-                key={example.text}
-                type="button"
-                onClick={() => setQuery(example.text)}
-                className={styles.exampleBtn}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {example.text}
-              </button>
-            );
-          })}
+          {EXAMPLE_QUERIES.map((example) => (
+            <button
+              key={example}
+              type="button"
+              onClick={() => setQuery(example)}
+              className={styles.exampleBtn}
+            >
+              {example}
+            </button>
+          ))}
         </div>
       </form>
     </Card>
