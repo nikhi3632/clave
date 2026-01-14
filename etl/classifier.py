@@ -353,38 +353,39 @@ class CategoryClassifier:
 
         # Build category context from known categories
         known_list = sorted(self._known_categories) if self._known_categories else []
-        category_guidance = ""
+
         if known_list:
-            category_guidance = f"""Known categories in this system (prefer these if applicable):
+            category_guidance = f"""IMPORTANT: Use these existing categories whenever possible to maintain consistency:
 {json.dumps(known_list)}
 
-"""
+Only suggest a new category if none of the above fit."""
+        else:
+            category_guidance = """No existing categories yet. Use clear, standard restaurant category names (title case)."""
 
         prompt = f"""Classify these restaurant menu items into categories.
 
-{category_guidance}Products to classify:
+{category_guidance}
+
+Products to classify:
 {json.dumps(products_info)}
 
 Guidelines:
-- Use standard restaurant category names (Entrees, Appetizers, Sides, Drinks, Desserts, Breakfast)
-- If a known category fits, use it exactly
-- Main dishes (burgers, sandwiches, steaks, pasta) → typically "Entrees"
-- Starters (wings, nachos, dips) → typically "Appetizers"
-- Coffee, soda, beer, wine, cocktails → typically "Drinks"
-- Sweet items (cake, ice cream, churros) → typically "Desserts"
+- CONSISTENCY IS KEY: If an existing category fits, use it exactly (same spelling, same case)
+- Use title case for all categories (e.g., "Drinks" not "drinks")
+- Be consistent: similar items should get the same category
+- Think about what category a restaurant customer would expect
 
 NOTE: Some items include "(source says: X)" hints from POS data.
 Use these as context but trust your judgment - the source may be wrong.
 
 Respond with a JSON object. For each product, provide:
-- category: the category name (use title case, e.g., "Drinks" not "drinks")
+- category: the category name (must match existing category exactly if applicable)
 - confidence: 0.0-1.0 (1.0 = certain, 0.5 = ambiguous/could be multiple)
 - reason: brief explanation, especially if overriding source or uncertain
 
-Example:
+Example response format:
 {{
-  "House Wine": {{"category": "Drinks", "confidence": 1.0, "reason": "Wine is a drink"}},
-  "Chicken Wings": {{"category": "Appetizers", "confidence": 0.7, "reason": "Could be entree"}}
+  "Product Name": {{"category": "Category", "confidence": 0.95, "reason": "explanation"}}
 }}"""
 
         response = self._provider.complete_sync(

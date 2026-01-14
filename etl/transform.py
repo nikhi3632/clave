@@ -185,17 +185,34 @@ class Transformer:
             if self.product_name_classifier:
                 self.product_name_classifier.add_product(original_name)
 
-        # Match product using fuzzy matching (will be improved by LLM later)
-        match = self.product_matcher.match(original_name)
-        canonical = match.matched
-        confidence = match.confidence
-        method = match.method
+        # Check LLM cache FIRST - it has authoritative mappings
+        # This prevents fuzzy matcher from wrongly grouping similar-sounding items
+        # (e.g., "Margarita" cocktail vs "Margherita Pizza")
+        llm_canonical = None
+        if self.product_name_classifier:
+            llm_canonical = self.product_name_classifier.get_canonical_name(original_name)
+            # Only use if it's different from original (meaning LLM has a mapping)
+            if llm_canonical == original_name:
+                llm_canonical = None
+
+        if llm_canonical:
+            # Use LLM's authoritative canonical name
+            canonical = llm_canonical
+            confidence = 1.0
+            method = "llm_cache"
+            changes.append(f"LLM cached: '{original_name}' -> '{canonical}'")
+        else:
+            # Fall back to fuzzy matching for new products
+            match = self.product_matcher.match(original_name)
+            canonical = match.matched
+            confidence = match.confidence
+            method = match.method
 
         if method == "new":
             self.product_matcher.add(original_name)
             canonical = original_name
             changes.append(f"New product: '{original_name}'")
-        elif canonical != original_name:
+        elif method != "llm_cache" and canonical != original_name:
             changes.append(
                 f"Normalized: '{original_name}' -> '{canonical}' ({method}, {confidence:.2f})"
             )
