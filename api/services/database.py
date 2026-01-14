@@ -1,8 +1,11 @@
+"""Database service - pure database operations without LLM concerns."""
+
 import asyncio
 import logging
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 from typing import Any
 
@@ -11,199 +14,6 @@ from supabase import Client, create_client
 from config import get_settings
 
 logger = logging.getLogger(__name__)
-
-
-# ============================================================
-# Comment Parsing Utilities
-# ============================================================
-
-
-def _extract_field(comment: str, field_name: str) -> str | None:
-    """Extract a single-line field value from a structured comment."""
-    pattern = rf"^{re.escape(field_name)}\s*(.+?)$"
-    match = re.search(pattern, comment, re.MULTILINE | re.IGNORECASE)
-    return match.group(1).strip() if match else None
-
-
-def _extract_list(comment: str, field_name: str) -> list[str]:
-    """Extract a comma-separated list from a structured comment."""
-    value = _extract_field(comment, field_name)
-    if not value:
-        return []
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
-def _is_internal_view(comment: str | None) -> bool:
-    """Check if a view is marked as internal (not for analytics)."""
-    if not comment:
-        return False
-    return comment.strip().upper().startswith("INTERNAL:")
-
-
-# ============================================================
-# Structured Metadata Dataclasses
-# ============================================================
-
-
-@dataclass
-class ViewMetadata:
-    """Parsed metadata from a view's COMMENT ON."""
-
-    name: str
-    purpose: str | None = None
-    dimensions: list[str] = field(default_factory=list)
-    metrics: list[str] = field(default_factory=list)
-    use_for: str | None = None
-    columns: list[dict[str, str]] = field(default_factory=list)  # [{column, type}]
-    is_analytics: bool = True
-
-
-@dataclass
-class DimensionInfo:
-    """Metadata about a dimension (from table COMMENT ON)."""
-
-    name: str  # "location", "product", "category"
-    table: str  # "locations", "products"
-    display_column: str  # "name", "canonical_name"
-    filter_pattern: str | None = None  # JOIN pattern with :filter_value
-    values: list[str] = field(default_factory=list)  # Actual values from data
-
-
-@dataclass
-class ColumnInfo:
-    """Metadata about a column including synonyms."""
-
-    name: str
-    data_type: str
-    synonyms: list[str] = field(default_factory=list)
-    note: str | None = None
-
-
-@dataclass
-class SchemaConventions:
-    """Schema-level conventions parsed from COMMENT ON SCHEMA."""
-
-    currency_unit: str = "cents"
-    currency_divisor: int = 100
-    currency_decimals: int = 2
-    naming_conventions: str | None = None
-    raw_comment: str | None = None
-
-
-def parse_view_comment(
-    name: str, comment: str | None, columns: list[dict[str, str]]
-) -> ViewMetadata:
-    """Parse a view's COMMENT ON into structured metadata."""
-    if not comment or _is_internal_view(comment):
-        return ViewMetadata(name=name, columns=columns, is_analytics=False)
-
-    return ViewMetadata(
-        name=name,
-        purpose=_extract_field(comment, "PURPOSE:"),
-        dimensions=_extract_list(comment, "DIMENSIONS:"),
-        metrics=_extract_list(comment, "METRICS:"),
-        use_for=_extract_field(comment, "USE FOR:"),
-        columns=columns,
-        is_analytics=True,
-    )
-
-
-def parse_column_comment(comment: str | None) -> dict[str, Any]:
-    """Parse a column's COMMENT ON for synonyms and notes."""
-    if not comment:
-        return {"synonyms": [], "note": None}
-
-    synonyms = _extract_list(comment, "SYNONYMS:")
-    note = _extract_field(comment, "NOTE:")
-
-    return {"synonyms": synonyms, "note": note}
-
-
-def parse_dimension_table_comment(
-    table_name: str, comment: str | None
-) -> list[DimensionInfo]:
-    """Parse a table's COMMENT ON for dimension metadata."""
-    if not comment or "DIMENSION:" not in comment.upper():
-        return []
-
-    dimensions = []
-
-    # Extract dimension names
-    dim_field = _extract_field(comment, "DIMENSION:")
-    if not dim_field:
-        return []
-
-    dim_names = [d.strip() for d in dim_field.split(",")]
-
-    # Extract display columns (may be per-dimension)
-    display_col = _extract_field(comment, "DISPLAY_COLUMN:")
-    display_cols = _extract_field(comment, "DISPLAY_COLUMNS:")
-
-    for dim_name in dim_names:
-        # Try to find dimension-specific display column
-        display_column = None
-        if display_cols:
-            # Parse "canonical_name (for product), category (for category)"
-            for part in display_cols.split(","):
-                if f"({dim_name})" in part.lower() or f"(for {dim_name})" in part.lower():
-                    display_column = part.split("(")[0].strip()
-                    break
-        if not display_column and display_col:
-            display_column = display_col
-
-        # Get filter pattern
-        filter_pattern = _extract_field(comment, f"FILTER_PATTERN_{dim_name}:")
-        if not filter_pattern:
-            filter_pattern = _extract_field(comment, "FILTER_PATTERN:")
-
-        dimensions.append(
-            DimensionInfo(
-                name=dim_name,
-                table=table_name,
-                display_column=display_column or "name",
-                filter_pattern=filter_pattern,
-                values=[],  # Filled in later
-            )
-        )
-
-    return dimensions
-
-
-def parse_schema_conventions(comment: str | None) -> SchemaConventions:
-    """Parse COMMENT ON SCHEMA for conventions."""
-    if not comment:
-        return SchemaConventions()
-
-    # Parse currency info
-    currency_line = _extract_field(comment, "CURRENCY:")
-    currency_unit = "cents"
-    currency_divisor = 100
-    currency_decimals = 2
-
-    if currency_line:
-        if "cents" in currency_line.lower():
-            currency_unit = "cents"
-        if "100" in currency_line:
-            currency_divisor = 100
-
-    naming = None
-    if "NAMING CONVENTIONS:" in comment.upper():
-        # Extract everything after NAMING CONVENTIONS: until next section or end
-        match = re.search(
-            r"NAMING CONVENTIONS:\s*\n([\s\S]*?)(?=\n[A-Z]+:|$)",
-            comment,
-            re.IGNORECASE,
-        )
-        if match:
-            naming = match.group(1).strip()
-
-    return SchemaConventions(
-        currency_unit=currency_unit,
-        currency_divisor=currency_divisor,
-        currency_decimals=currency_decimals,
-        naming_conventions=naming,
-        raw_comment=comment,
-    )
 
 
 class DatabaseError(Exception):
@@ -311,8 +121,6 @@ _date_range_cache: dict[str, tuple[DataDateRange, float]] = {}
 
 def _format_date_range(min_date: str, max_date: str) -> str:
     """Format date range for human-readable display."""
-    from datetime import datetime
-
     min_dt = datetime.strptime(min_date, "%Y-%m-%d")
     max_dt = datetime.strptime(max_date, "%Y-%m-%d")
 
@@ -369,58 +177,57 @@ async def get_data_date_range() -> DataDateRange:
     )
 
 
+# ============================================================
+# Raw Schema Data (no parsing, just raw query results)
+# ============================================================
+
+
 @dataclass
-class SchemaInfo:
-    """Dynamic schema information for LLM context."""
+class RawSchemaData:
+    """Raw schema data from database introspection (no interpretation)."""
 
-    # Parsed view metadata (analytics views only)
-    views: dict[str, ViewMetadata]
+    # Tables and their columns
+    tables: dict[str, list[dict[str, str]]]  # table -> [{column, type}]
 
-    # Discovered dimensions from table comments
-    dimensions: dict[str, DimensionInfo]
+    # Views and their columns
+    views: dict[str, list[dict[str, str]]]  # view -> [{column, type}]
 
-    # Column info with synonyms
-    columns: dict[str, ColumnInfo]  # "view.column" -> ColumnInfo
+    # Raw comments (unparsed)
+    table_comments: dict[str, str]  # table_name -> comment
+    view_comments: dict[str, str]  # view_name -> comment
+    column_comments: dict[str, str]  # "table.column" -> comment
+    schema_comment: str | None  # COMMENT ON SCHEMA public
 
-    # Schema conventions
-    conventions: SchemaConventions
+    # Dimension values (raw lists)
+    locations: list[str]
+    sources: list[str]
+    channels: list[str]
+    categories: list[str]
+    payment_types: list[str]
+    products: list[str]
 
     # Date range
     date_range: DataDateRange
 
-    # Base tables (for reference)
-    tables: dict[str, list[dict[str, str]]]  # table -> [{column, type}]
 
-    # Raw comments (for backward compatibility during transition)
-    column_comments: dict[str, str]  # "table.column" -> comment
-    view_comments: dict[str, str]  # "view_name" -> comment
-
-    # Legacy dimension values (for backward compatibility)
-    locations: list[str] = field(default_factory=list)
-    sources: list[str] = field(default_factory=list)
-    channels: list[str] = field(default_factory=list)
-    categories: list[str] = field(default_factory=list)
-    payment_types: list[str] = field(default_factory=list)
+# Cache for raw schema
+_raw_schema_cache: dict[str, tuple[RawSchemaData, float]] = {}
 
 
-# Cache for schema info
-_schema_cache: dict[str, tuple[SchemaInfo, float]] = {}
-
-
-async def get_schema_info() -> SchemaInfo:
-    """Get dynamic schema information from the database."""
-    cache_key = "schema"
+async def get_raw_schema() -> RawSchemaData:
+    """Get raw schema data from database (no parsing/interpretation)."""
+    cache_key = "raw_schema"
     settings = get_settings()
 
-    if cache_key in _schema_cache:
-        cached, cached_at = _schema_cache[cache_key]
+    if cache_key in _raw_schema_cache:
+        cached, cached_at = _raw_schema_cache[cache_key]
         if time.time() - cached_at < settings.schema_cache_ttl:
             return cached
 
     client = get_supabase_client()
 
     # ============================================================
-    # 1. Get legacy dimension values (for backward compatibility)
+    # 1. Get dimension values
     # ============================================================
 
     locations_sql = "SELECT DISTINCT name FROM locations ORDER BY name"
@@ -453,6 +260,12 @@ async def get_schema_info() -> SchemaInfo:
     ).execute()
     payment_types = [r["payment_type"] for r in (payment_types_result.data or [])]
 
+    products_sql = "SELECT DISTINCT canonical_name FROM products ORDER BY canonical_name"
+    products_result = client.rpc(
+        "execute_readonly_query", {"query_text": products_sql}
+    ).execute()
+    products = [r["canonical_name"] for r in (products_result.data or [])]
+
     # Get date range
     date_range = await get_data_date_range()
 
@@ -476,7 +289,7 @@ async def get_schema_info() -> SchemaInfo:
             tables[table] = []
         tables[table].append({"column": row["column_name"], "type": row["data_type"]})
 
-    # Get table-level comments (for dimension discovery)
+    # Get table-level comments
     table_comments_sql = (
         "SELECT c.relname as table_name, d.description "
         "FROM pg_catalog.pg_description d "
@@ -493,49 +306,7 @@ async def get_schema_info() -> SchemaInfo:
         table_comments[row["table_name"]] = row["description"]
 
     # ============================================================
-    # 3. Discover dimensions from table comments
-    # ============================================================
-
-    discovered_dimensions: dict[str, DimensionInfo] = {}
-    for table_name, comment in table_comments.items():
-        dims = parse_dimension_table_comment(table_name, comment)
-        for dim in dims:
-            discovered_dimensions[dim.name] = dim
-
-    # Fill in dimension values
-    if "location" in discovered_dimensions:
-        discovered_dimensions["location"].values = locations
-    if "product" in discovered_dimensions:
-        discovered_dimensions["product"].values = [
-            r["canonical_name"]
-            for r in (
-                client.rpc(
-                    "execute_readonly_query",
-                    {"query_text": "SELECT DISTINCT canonical_name FROM products"},
-                ).execute().data or []
-            )
-        ]
-    if "category" in discovered_dimensions:
-        discovered_dimensions["category"].values = categories
-
-    # Add implicit dimensions (source, channel) that aren't from dimension tables
-    discovered_dimensions["source"] = DimensionInfo(
-        name="source",
-        table="orders",
-        display_column="source",
-        filter_pattern="WHERE source = :filter_value",
-        values=sources,
-    )
-    discovered_dimensions["channel"] = DimensionInfo(
-        name="channel",
-        table="orders",
-        display_column="channel",
-        filter_pattern="WHERE channel = :filter_value",
-        values=channels,
-    )
-
-    # ============================================================
-    # 4. Get materialized view schemas and comments
+    # 3. Get materialized view schemas and comments
     # ============================================================
 
     views_sql = (
@@ -550,12 +321,12 @@ async def get_schema_info() -> SchemaInfo:
     )
     views_result = client.rpc("execute_readonly_query", {"query_text": views_sql}).execute()
 
-    raw_views: dict[str, list[dict[str, str]]] = {}
+    views: dict[str, list[dict[str, str]]] = {}
     for row in views_result.data or []:
         view = row["view_name"]
-        if view not in raw_views:
-            raw_views[view] = []
-        raw_views[view].append({"column": row["column_name"], "type": row["data_type"]})
+        if view not in views:
+            views[view] = []
+        views[view].append({"column": row["column_name"], "type": row["data_type"]})
 
     # Get view-level comments
     view_comments_sql = (
@@ -573,19 +344,11 @@ async def get_schema_info() -> SchemaInfo:
     for row in view_comments_result.data or []:
         view_comments[row["view_name"]] = row["description"]
 
-    # Parse view metadata and filter out internal views
-    parsed_views: dict[str, ViewMetadata] = {}
-    for view_name, columns in raw_views.items():
-        comment = view_comments.get(view_name)
-        metadata = parse_view_comment(view_name, comment, columns)
-        if metadata.is_analytics:
-            parsed_views[view_name] = metadata
-
     # ============================================================
-    # 5. Get column comments and parse synonyms
+    # 4. Get column comments
     # ============================================================
 
-    comments_sql = (
+    column_comments_sql = (
         "SELECT c.relname as table_name, a.attname as column_name, d.description "
         "FROM pg_catalog.pg_description d "
         "JOIN pg_catalog.pg_class c ON d.objoid = c.oid "
@@ -593,43 +356,17 @@ async def get_schema_info() -> SchemaInfo:
         "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname = 'public' AND d.objsubid > 0"
     )
-    comments_result = client.rpc(
-        "execute_readonly_query", {"query_text": comments_sql}
+    column_comments_result = client.rpc(
+        "execute_readonly_query", {"query_text": column_comments_sql}
     ).execute()
 
     column_comments: dict[str, str] = {}
-    parsed_columns: dict[str, ColumnInfo] = {}
-
-    for row in comments_result.data or []:
+    for row in column_comments_result.data or []:
         key = f"{row['table_name']}.{row['column_name']}"
-        comment = row["description"]
-        column_comments[key] = comment
-
-        # Parse synonyms from comment
-        parsed = parse_column_comment(comment)
-
-        # Get column type from view or table
-        col_type = "unknown"
-        if row["table_name"] in raw_views:
-            for col in raw_views[row["table_name"]]:
-                if col["column"] == row["column_name"]:
-                    col_type = col["type"]
-                    break
-        elif row["table_name"] in tables:
-            for col in tables[row["table_name"]]:
-                if col["column"] == row["column_name"]:
-                    col_type = col["type"]
-                    break
-
-        parsed_columns[key] = ColumnInfo(
-            name=row["column_name"],
-            data_type=col_type,
-            synonyms=parsed["synonyms"],
-            note=parsed.get("note"),
-        )
+        column_comments[key] = row["description"]
 
     # ============================================================
-    # 6. Get schema conventions
+    # 5. Get schema-level comment
     # ============================================================
 
     schema_comment_sql = (
@@ -645,28 +382,25 @@ async def get_schema_info() -> SchemaInfo:
     if schema_comment_result.data:
         schema_comment = schema_comment_result.data[0].get("description")
 
-    conventions = parse_schema_conventions(schema_comment)
-
     # ============================================================
-    # 7. Build and cache SchemaInfo
+    # 6. Build and cache RawSchemaData
     # ============================================================
 
-    schema_info = SchemaInfo(
-        views=parsed_views,
-        dimensions=discovered_dimensions,
-        columns=parsed_columns,
-        conventions=conventions,
-        date_range=date_range,
+    raw_schema = RawSchemaData(
         tables=tables,
-        column_comments=column_comments,
+        views=views,
+        table_comments=table_comments,
         view_comments=view_comments,
-        # Legacy fields for backward compatibility
+        column_comments=column_comments,
+        schema_comment=schema_comment,
         locations=locations,
         sources=sources,
         channels=channels,
         categories=categories,
         payment_types=payment_types,
+        products=products,
+        date_range=date_range,
     )
 
-    _schema_cache[cache_key] = (schema_info, time.time())
-    return schema_info
+    _raw_schema_cache[cache_key] = (raw_schema, time.time())
+    return raw_schema

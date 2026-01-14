@@ -3,17 +3,12 @@
 import json
 import logging
 import os
-import sys
 from dataclasses import dataclass
-from pathlib import Path
 
 from supabase import Client
 
-# Add project root to path for shared llm module
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from llm import get_provider
-
 from exceptions import ETLError
+from llm_client import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +83,7 @@ class CategoryClassifier:
             raise ETLError("ANTHROPIC_API_KEY must be set for category classification")
 
         self.model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
-        self._provider = get_provider(
+        self._provider = get_client(
             api_key=api_key,
             model=self.model,
             provider=os.environ.get("LLM_PROVIDER", "anthropic"),
@@ -523,7 +518,7 @@ class ProductNameClassifier:
             raise ETLError("ANTHROPIC_API_KEY must be set for product name classification")
 
         self.model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
-        self._provider = get_provider(
+        self._provider = get_client(
             api_key=api_key,
             model=self.model,
             provider=os.environ.get("LLM_PROVIDER", "anthropic"),

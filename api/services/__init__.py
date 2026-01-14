@@ -1,31 +1,40 @@
+from llm import LLMError
+
 from .database import (
     DatabaseError,
     DataDateRange,
-    SchemaInfo,
+    RawSchemaData,
     execute_query,
     get_data_date_range,
-    get_schema_info,
+    get_raw_schema,
     get_supabase_client,
 )
-from .llm import (
-    LLMError,
+from .query import (
     LLMResult,
+    SchemaInfo,
+    ViewMetadata,
+    get_schema_info,
     process_query,
     process_query_with_retry,
     validate_chart_type,
 )
 
 __all__ = [
+    # Database service
     "DatabaseError",
     "get_supabase_client",
     "execute_query",
     "get_data_date_range",
-    "get_schema_info",
+    "get_raw_schema",
     "DataDateRange",
-    "SchemaInfo",
+    "RawSchemaData",
+    # Query service (LLM-based)
     "LLMError",
+    "LLMResult",
+    "SchemaInfo",
+    "ViewMetadata",
+    "get_schema_info",
     "process_query",
     "process_query_with_retry",
-    "LLMResult",
     "validate_chart_type",
 ]

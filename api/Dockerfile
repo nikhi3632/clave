@@ -6,10 +6,7 @@ WORKDIR /app
 COPY api/pyproject.toml .
 RUN pip install --no-cache-dir .
 
-# Copy shared llm module
-COPY llm/ ./llm/
-
-# Copy application code
+# Copy application code (includes llm/ subdirectory)
 COPY api/ .
 
 # Expose port

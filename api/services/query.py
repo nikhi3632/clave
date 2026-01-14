@@ -1,30 +1,391 @@
+"""Query service - LLM-based query processing with schema interpretation."""
+
 import asyncio
 import json
 import logging
 import re
-import sys
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from config import get_settings
+from llm import APIError, LLMError, RateLimitError, get_provider
 
-# Add project root to path for shared llm module (for local dev)
-project_root = Path(__file__).parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-
-from llm import APIError, LLMError, RateLimitError, get_provider  # noqa: E402
-
-from .database import SchemaInfo, ViewMetadata, get_schema_info  # noqa: E402
+from .database import DatabaseError, DataDateRange, get_raw_schema
 
 logger = logging.getLogger(__name__)
 
 
+# ============================================================
+# Type Definitions
+# ============================================================
+
 ChartType = Literal["bar", "line", "pie", "table", "metric", "info"]
 ValueFormat = Literal["currency", "number", "percent"]
-# DrillDownType is now validated dynamically against schema.dimensions
+
+
+# ============================================================
+# Comment Parsing Utilities (LLM-specific interpretation)
+# ============================================================
+
+
+def _extract_field(comment: str, field_name: str) -> str | None:
+    """Extract a single-line field value from a structured comment."""
+    pattern = rf"^{re.escape(field_name)}\s*(.+?)$"
+    match = re.search(pattern, comment, re.MULTILINE | re.IGNORECASE)
+    return match.group(1).strip() if match else None
+
+
+def _extract_list(comment: str, field_name: str) -> list[str]:
+    """Extract a comma-separated list from a structured comment."""
+    value = _extract_field(comment, field_name)
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _is_internal_view(comment: str | None) -> bool:
+    """Check if a view is marked as internal (not for analytics)."""
+    if not comment:
+        return False
+    return comment.strip().upper().startswith("INTERNAL:")
+
+
+# ============================================================
+# Parsed Schema Dataclasses (LLM context)
+# ============================================================
+
+
+@dataclass
+class ViewMetadata:
+    """Parsed metadata from a view's COMMENT ON."""
+
+    name: str
+    purpose: str | None = None
+    dimensions: list[str] = field(default_factory=list)
+    metrics: list[str] = field(default_factory=list)
+    use_for: str | None = None
+    columns: list[dict[str, str]] = field(default_factory=list)  # [{column, type}]
+    is_analytics: bool = True
+
+
+@dataclass
+class DimensionInfo:
+    """Metadata about a dimension (from table COMMENT ON)."""
+
+    name: str  # "location", "product", "category"
+    table: str  # "locations", "products"
+    display_column: str  # "name", "canonical_name"
+    filter_pattern: str | None = None  # JOIN pattern with :filter_value
+    values: list[str] = field(default_factory=list)  # Actual values from data
+
+
+@dataclass
+class ColumnInfo:
+    """Metadata about a column including synonyms."""
+
+    name: str
+    data_type: str
+    synonyms: list[str] = field(default_factory=list)
+    note: str | None = None
+
+
+@dataclass
+class SchemaConventions:
+    """Schema-level conventions parsed from COMMENT ON SCHEMA."""
+
+    currency_unit: str = "cents"
+    currency_divisor: int = 100
+    currency_decimals: int = 2
+    naming_conventions: str | None = None
+    raw_comment: str | None = None
+
+
+@dataclass
+class SchemaInfo:
+    """Dynamic schema information for LLM context."""
+
+    # Parsed view metadata (analytics views only)
+    views: dict[str, ViewMetadata]
+
+    # Discovered dimensions from table comments
+    dimensions: dict[str, DimensionInfo]
+
+    # Column info with synonyms
+    columns: dict[str, ColumnInfo]  # "view.column" -> ColumnInfo
+
+    # Schema conventions
+    conventions: SchemaConventions
+
+    # Date range
+    date_range: DataDateRange
+
+    # Base tables (for reference)
+    tables: dict[str, list[dict[str, str]]]  # table -> [{column, type}]
+
+    # Raw comments (for backward compatibility during transition)
+    column_comments: dict[str, str]  # "table.column" -> comment
+    view_comments: dict[str, str]  # "view_name" -> comment
+
+    # Legacy dimension values (for backward compatibility)
+    locations: list[str] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
+    channels: list[str] = field(default_factory=list)
+    categories: list[str] = field(default_factory=list)
+    payment_types: list[str] = field(default_factory=list)
+
+
+# ============================================================
+# Comment Parsing Functions
+# ============================================================
+
+
+def parse_view_comment(
+    name: str, comment: str | None, columns: list[dict[str, str]]
+) -> ViewMetadata:
+    """Parse a view's COMMENT ON into structured metadata."""
+    if not comment or _is_internal_view(comment):
+        return ViewMetadata(name=name, columns=columns, is_analytics=False)
+
+    return ViewMetadata(
+        name=name,
+        purpose=_extract_field(comment, "PURPOSE:"),
+        dimensions=_extract_list(comment, "DIMENSIONS:"),
+        metrics=_extract_list(comment, "METRICS:"),
+        use_for=_extract_field(comment, "USE FOR:"),
+        columns=columns,
+        is_analytics=True,
+    )
+
+
+def parse_column_comment(comment: str | None) -> dict[str, Any]:
+    """Parse a column's COMMENT ON for synonyms and notes."""
+    if not comment:
+        return {"synonyms": [], "note": None}
+
+    synonyms = _extract_list(comment, "SYNONYMS:")
+    note = _extract_field(comment, "NOTE:")
+
+    return {"synonyms": synonyms, "note": note}
+
+
+def parse_dimension_table_comment(
+    table_name: str, comment: str | None
+) -> list[DimensionInfo]:
+    """Parse a table's COMMENT ON for dimension metadata."""
+    if not comment or "DIMENSION:" not in comment.upper():
+        return []
+
+    dimensions = []
+
+    # Extract dimension names
+    dim_field = _extract_field(comment, "DIMENSION:")
+    if not dim_field:
+        return []
+
+    dim_names = [d.strip() for d in dim_field.split(",")]
+
+    # Extract display columns (may be per-dimension)
+    display_col = _extract_field(comment, "DISPLAY_COLUMN:")
+    display_cols = _extract_field(comment, "DISPLAY_COLUMNS:")
+
+    for dim_name in dim_names:
+        # Try to find dimension-specific display column
+        display_column = None
+        if display_cols:
+            # Parse "canonical_name (for product), category (for category)"
+            for part in display_cols.split(","):
+                if f"({dim_name})" in part.lower() or f"(for {dim_name})" in part.lower():
+                    display_column = part.split("(")[0].strip()
+                    break
+        if not display_column and display_col:
+            display_column = display_col
+
+        # Get filter pattern
+        filter_pattern = _extract_field(comment, f"FILTER_PATTERN_{dim_name}:")
+        if not filter_pattern:
+            filter_pattern = _extract_field(comment, "FILTER_PATTERN:")
+
+        dimensions.append(
+            DimensionInfo(
+                name=dim_name,
+                table=table_name,
+                display_column=display_column or "name",
+                filter_pattern=filter_pattern,
+                values=[],  # Filled in later
+            )
+        )
+
+    return dimensions
+
+
+def parse_schema_conventions(comment: str | None) -> SchemaConventions:
+    """Parse COMMENT ON SCHEMA for conventions."""
+    if not comment:
+        return SchemaConventions()
+
+    # Parse currency info
+    currency_line = _extract_field(comment, "CURRENCY:")
+    currency_unit = "cents"
+    currency_divisor = 100
+    currency_decimals = 2
+
+    if currency_line:
+        if "cents" in currency_line.lower():
+            currency_unit = "cents"
+        if "100" in currency_line:
+            currency_divisor = 100
+
+    naming = None
+    if "NAMING CONVENTIONS:" in comment.upper():
+        # Extract everything after NAMING CONVENTIONS: until next section or end
+        match = re.search(
+            r"NAMING CONVENTIONS:\s*\n([\s\S]*?)(?=\n[A-Z]+:|$)",
+            comment,
+            re.IGNORECASE,
+        )
+        if match:
+            naming = match.group(1).strip()
+
+    return SchemaConventions(
+        currency_unit=currency_unit,
+        currency_divisor=currency_divisor,
+        currency_decimals=currency_decimals,
+        naming_conventions=naming,
+        raw_comment=comment,
+    )
+
+
+# ============================================================
+# Schema Building (interprets raw data for LLM)
+# ============================================================
+
+# Cache for parsed schema
+_schema_cache: dict[str, tuple[SchemaInfo, float]] = {}
+
+
+async def get_schema_info() -> SchemaInfo:
+    """Get parsed schema information for LLM context."""
+    cache_key = "schema"
+    settings = get_settings()
+
+    if cache_key in _schema_cache:
+        cached, cached_at = _schema_cache[cache_key]
+        if time.time() - cached_at < settings.schema_cache_ttl:
+            return cached
+
+    # Get raw schema from database
+    raw = await get_raw_schema()
+
+    # ============================================================
+    # 1. Discover dimensions from table comments
+    # ============================================================
+
+    discovered_dimensions: dict[str, DimensionInfo] = {}
+    for table_name, comment in raw.table_comments.items():
+        dims = parse_dimension_table_comment(table_name, comment)
+        for dim in dims:
+            discovered_dimensions[dim.name] = dim
+
+    # Fill in dimension values from raw schema
+    if "location" in discovered_dimensions:
+        discovered_dimensions["location"].values = raw.locations
+    if "product" in discovered_dimensions:
+        discovered_dimensions["product"].values = raw.products
+    if "category" in discovered_dimensions:
+        discovered_dimensions["category"].values = raw.categories
+
+    # Add implicit dimensions (source, channel) that aren't from dimension tables
+    discovered_dimensions["source"] = DimensionInfo(
+        name="source",
+        table="orders",
+        display_column="source",
+        filter_pattern="WHERE source = :filter_value",
+        values=raw.sources,
+    )
+    discovered_dimensions["channel"] = DimensionInfo(
+        name="channel",
+        table="orders",
+        display_column="channel",
+        filter_pattern="WHERE channel = :filter_value",
+        values=raw.channels,
+    )
+
+    # ============================================================
+    # 2. Parse view metadata and filter out internal views
+    # ============================================================
+
+    parsed_views: dict[str, ViewMetadata] = {}
+    for view_name, columns in raw.views.items():
+        comment = raw.view_comments.get(view_name)
+        metadata = parse_view_comment(view_name, comment, columns)
+        if metadata.is_analytics:
+            parsed_views[view_name] = metadata
+
+    # ============================================================
+    # 3. Parse column comments for synonyms
+    # ============================================================
+
+    parsed_columns: dict[str, ColumnInfo] = {}
+    for key, comment in raw.column_comments.items():
+        table_name, col_name = key.split(".", 1)
+        parsed = parse_column_comment(comment)
+
+        # Get column type from view or table
+        col_type = "unknown"
+        if table_name in raw.views:
+            for col in raw.views[table_name]:
+                if col["column"] == col_name:
+                    col_type = col["type"]
+                    break
+        elif table_name in raw.tables:
+            for col in raw.tables[table_name]:
+                if col["column"] == col_name:
+                    col_type = col["type"]
+                    break
+
+        parsed_columns[key] = ColumnInfo(
+            name=col_name,
+            data_type=col_type,
+            synonyms=parsed["synonyms"],
+            note=parsed.get("note"),
+        )
+
+    # ============================================================
+    # 4. Parse schema conventions
+    # ============================================================
+
+    conventions = parse_schema_conventions(raw.schema_comment)
+
+    # ============================================================
+    # 5. Build and cache SchemaInfo
+    # ============================================================
+
+    schema_info = SchemaInfo(
+        views=parsed_views,
+        dimensions=discovered_dimensions,
+        columns=parsed_columns,
+        conventions=conventions,
+        date_range=raw.date_range,
+        tables=raw.tables,
+        column_comments=raw.column_comments,
+        view_comments=raw.view_comments,
+        # Legacy fields for backward compatibility
+        locations=raw.locations,
+        sources=raw.sources,
+        channels=raw.channels,
+        categories=raw.categories,
+        payment_types=raw.payment_types,
+    )
+
+    _schema_cache[cache_key] = (schema_info, time.time())
+    return schema_info
+
+
+# ============================================================
+# LLM Response Types
+# ============================================================
 
 
 @dataclass
@@ -34,7 +395,7 @@ class DrillDownConfig:
     enabled: bool
     type: str | None = None  # Validated against schema.dimensions at runtime
     column: str | None = None
-    summary_sql: str | None = None  # SQL query to calculate drill-down summary (same logic as chart)
+    summary_sql: str | None = None  # SQL query to calculate drill-down summary
     summary_label: str | None = None  # Display label for the summary value
 
 
@@ -52,7 +413,10 @@ class LLMResult:
     drill_down: DrillDownConfig | None = None
 
 
-# SQL validation patterns
+# ============================================================
+# SQL Validation
+# ============================================================
+
 DANGEROUS_SQL_PATTERNS = [
     re.compile(r"\b(DROP|DELETE|INSERT|UPDATE|ALTER|TRUNCATE|CREATE|GRANT|REVOKE)\b", re.I),
     re.compile(r"\b(EXEC|EXECUTE|CALL)\b", re.I),
@@ -60,6 +424,22 @@ DANGEROUS_SQL_PATTERNS = [
     re.compile(r"--"),
     re.compile(r"/\*"),
 ]
+
+
+def _validate_sql(sql: str) -> None:
+    """Validate SQL for safety."""
+    trimmed = sql.strip().upper()
+    if not trimmed.startswith("SELECT") and not trimmed.startswith("WITH"):
+        raise LLMError("Invalid SQL: must be a SELECT query", "INVALID_SQL", False)
+
+    for pattern in DANGEROUS_SQL_PATTERNS:
+        if pattern.search(sql):
+            raise LLMError("Invalid SQL: contains disallowed operations", "INVALID_SQL", False)
+
+
+# ============================================================
+# Schema Formatting for LLM Prompt
+# ============================================================
 
 
 def _simplify_pg_type(pg_type: str) -> str:
@@ -127,7 +507,6 @@ def _format_view_from_metadata(view: ViewMetadata, column_comments: dict[str, st
         if comment:
             # Extract synonyms if present
             if "SYNONYMS:" in comment.upper():
-                import re
                 match = re.search(r"SYNONYMS:\s*([^\n]+)", comment, re.IGNORECASE)
                 if match:
                     col_line += f" (synonyms: {match.group(1).strip()})"
@@ -285,20 +664,14 @@ def build_system_prompt(schema: SchemaInfo) -> str:
     return f"{schema_context}\n{CHART_SELECTION_GUIDELINES}\n{TASK_PROMPT}"
 
 
+# ============================================================
+# LLM Response Parsing
+# ============================================================
+
+
 def _get_current_date_context() -> str:
     """Get current date in readable format."""
     return datetime.now().strftime("%A, %B %d, %Y")
-
-
-def _validate_sql(sql: str) -> None:
-    """Validate SQL for safety."""
-    trimmed = sql.strip().upper()
-    if not trimmed.startswith("SELECT") and not trimmed.startswith("WITH"):
-        raise LLMError("Invalid SQL: must be a SELECT query", "INVALID_SQL", False)
-
-    for pattern in DANGEROUS_SQL_PATTERNS:
-        if pattern.search(sql):
-            raise LLMError("Invalid SQL: contains disallowed operations", "INVALID_SQL", False)
 
 
 def _parse_response(text: str) -> LLMResult:
@@ -412,6 +785,11 @@ def _parse_response(text: str) -> LLMResult:
     )
 
 
+# ============================================================
+# LLM Calling
+# ============================================================
+
+
 async def _call_llm_with_retry(user_query: str, retry_count: int = 0) -> str:
     """Call LLM with retry logic."""
     settings = get_settings()
@@ -426,13 +804,15 @@ async def _call_llm_with_retry(user_query: str, retry_count: int = 0) -> str:
         schema = await get_schema_info()
         system_prompt = build_system_prompt(schema)
 
+        date_min = schema.date_range.min_date
+        date_max = schema.date_range.max_date
         response = await provider.complete(
             messages=[
                 {
                     "role": "user",
                     "content": f"""Context:
 - Current date: {current_date}
-- Available data range: {schema.date_range.formatted} ({schema.date_range.min_date} to {schema.date_range.max_date})
+- Available data range: {schema.date_range.formatted} ({date_min} to {date_max})
 
 User query: "{user_query}"
 
@@ -458,6 +838,11 @@ Return the JSON object with sql, chartType, title, xAxis/yAxis or dataKey/nameKe
             await asyncio.sleep(delay)
             return await _call_llm_with_retry(user_query, retry_count + 1)
         raise
+
+
+# ============================================================
+# Chart Type Validation
+# ============================================================
 
 
 def validate_chart_type(
@@ -555,6 +940,11 @@ def validate_chart_type(
     return result
 
 
+# ============================================================
+# Error Recovery
+# ============================================================
+
+
 async def _call_llm_with_error_context(
     user_query: str,
     failed_sql: str,
@@ -571,6 +961,8 @@ async def _call_llm_with_error_context(
     current_date = _get_current_date_context()
     schema = await get_schema_info()
     system_prompt = build_system_prompt(schema)
+    date_min = schema.date_range.min_date
+    date_max = schema.date_range.max_date
 
     error_context = f"""
 ## Correction Needed
@@ -600,7 +992,7 @@ Generate a corrected query.
                 "role": "user",
                 "content": f"""Context:
 - Current date: {current_date}
-- Available data range: {schema.date_range.formatted} ({schema.date_range.min_date} to {schema.date_range.max_date})
+- Available data range: {schema.date_range.formatted} ({date_min} to {date_max})
 
 User query: "{user_query}"
 
@@ -614,6 +1006,11 @@ Return the corrected JSON object.""",
     )
 
     return response.content
+
+
+# ============================================================
+# Public API
+# ============================================================
 
 
 async def process_query(user_query: str) -> LLMResult:
@@ -653,8 +1050,6 @@ async def process_query_with_retry(
     Raises:
         LLMError or DatabaseError if all attempts fail
     """
-    from .database import DatabaseError
-
     settings = get_settings()
 
     if not user_query or len(user_query.strip()) == 0:

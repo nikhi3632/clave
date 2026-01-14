@@ -39,7 +39,7 @@ target-version = "py311"
 select = ["E", "F", "I", "W"]
 
 [tool.ruff.lint.per-file-ignores]
-"services/llm.py" = ["E501"]  # LLM prompts shouldn't be line-wrapped
+"services/query.py" = ["E501"]  # LLM prompts shouldn't be line-wrapped
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

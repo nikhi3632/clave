@@ -86,7 +86,11 @@ class AnthropicProvider(LLMProvider):
             response = self._client.messages.create(**kwargs)
             return self._parse_response(response)
 
-        except (anthropic.RateLimitError, anthropic.AuthenticationError, anthropic.APIStatusError) as e:
+        except (
+            anthropic.RateLimitError,
+            anthropic.AuthenticationError,
+            anthropic.APIStatusError,
+        ) as e:
             self._handle_error(e)
             raise  # Unreachable, but makes type checker happy
 
@@ -109,6 +113,10 @@ class AnthropicProvider(LLMProvider):
             response = self._client.messages.create(**kwargs)
             return self._parse_response(response)
 
-        except (anthropic.RateLimitError, anthropic.AuthenticationError, anthropic.APIStatusError) as e:
+        except (
+            anthropic.RateLimitError,
+            anthropic.AuthenticationError,
+            anthropic.APIStatusError,
+        ) as e:
             self._handle_error(e)
             raise  # Unreachable, but makes type checker happy
