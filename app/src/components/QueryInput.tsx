@@ -20,8 +20,9 @@ interface QueryInputProps {
 }
 
 const EXAMPLE_QUERIES = [
-  { text: "Total revenue", icon: DollarIcon },
+  { text: "Total sales", icon: DollarIcon },
   { text: "Sales by location", icon: LocationIcon },
+  { text: "Total proceeds", icon: DollarIcon },
   { text: "Hourly sales trend", icon: ClockIcon },
   { text: "Channel breakdown", icon: PieChartIcon },
   { text: "All products with sales", icon: TableIcon },

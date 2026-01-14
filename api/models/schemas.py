@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 
 
 class ChartType(str, Enum):
+    """Supported chart/visualization types."""
+
     BAR = "bar"
     LINE = "line"
     PIE = "pie"
@@ -15,12 +17,16 @@ class ChartType(str, Enum):
 
 
 class ValueFormat(str, Enum):
+    """Value formatting options for display."""
+
     CURRENCY = "currency"
     NUMBER = "number"
     PERCENT = "percent"
 
 
 class DrillDownType(str, Enum):
+    """Dimension types for drill-down filtering."""
+
     LOCATION = "location"
     DATE = "date"
     PRODUCT = "product"
@@ -30,75 +36,108 @@ class DrillDownType(str, Enum):
 
 
 class DrillDownConfig(BaseModel):
-    """Configuration for drill-down functionality."""
+    """Configuration for drill-down functionality on chart data points."""
 
-    enabled: bool
-    type: DrillDownType | None = None
-    column: str | None = None
+    enabled: bool = Field(description="Whether drill-down is enabled")
+    type: DrillDownType | None = Field(default=None, description="Dimension type to filter by")
+    column: str | None = Field(default=None, description="Column with the filter value")
+    summary_sql: str | None = Field(
+        default=None, alias="summarySQL", description="SQL to calculate drill-down summary"
+    )
+    summary_label: str | None = Field(
+        default=None, alias="summaryLabel", description="Display label for summary value"
+    )
+
+    class Config:
+        populate_by_name = True
 
 
 class QueryRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=1000)
+    """Request payload for natural language query endpoint."""
+
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=1000,
+        description="Natural language query about restaurant analytics",
+        examples=["Show me sales by location", "What were the top 5 selling products?"],
+    )
 
 
 class QueryResponse(BaseModel):
-    success: bool = True
-    query: str
-    sql: str
-    chart_type: ChartType = Field(alias="chartType")
-    title: str
-    x_axis: str | None = Field(default=None, alias="xAxis")
-    y_axis: str | None = Field(default=None, alias="yAxis")
-    data_key: str | None = Field(default=None, alias="dataKey")
-    name_key: str | None = Field(default=None, alias="nameKey")
-    value_format: ValueFormat | None = Field(default=None, alias="valueFormat")
-    summary: str
-    data: list[dict[str, Any]]
-    data_range: str = Field(alias="dataRange")
-    drill_down: DrillDownConfig | None = Field(default=None, alias="drillDown")
+    """Response from natural language query endpoint."""
+
+    success: bool = Field(default=True, description="Whether the query was processed successfully")
+    query: str = Field(description="The original natural language query")
+    sql: str = Field(description="Generated SQL query")
+    chart_type: ChartType = Field(alias="chartType", description="Recommended visualization type")
+    title: str = Field(description="Human-readable title for the visualization")
+    x_axis: str | None = Field(default=None, alias="xAxis", description="X-axis key")
+    y_axis: str | None = Field(default=None, alias="yAxis", description="Y-axis key")
+    data_key: str | None = Field(default=None, alias="dataKey", description="Value key (pie)")
+    name_key: str | None = Field(default=None, alias="nameKey", description="Label key (pie)")
+    value_format: ValueFormat | None = Field(
+        default=None, alias="valueFormat", description="How to format values"
+    )
+    summary: str = Field(description="Human-readable summary of the data")
+    data: list[dict[str, Any]] = Field(description="Query result data rows")
+    data_range: str = Field(alias="dataRange", description="Date range of available data")
+    drill_down: DrillDownConfig | None = Field(
+        default=None, alias="drillDown", description="Drill-down configuration"
+    )
 
     class Config:
         populate_by_name = True
 
 
 class DrillDownParams(BaseModel):
-    product: str | None = None
-    location: str | None = None
-    date: str | None = None
-    source: str | None = None
-    channel: str | None = None
-    payment_type: str | None = None
-    category: str | None = None
-    limit: int = Field(default=50, ge=1, le=500)
+    """Filter parameters for drill-down queries."""
+
+    product: str | None = Field(default=None, description="Filter by product name")
+    location: str | None = Field(default=None, description="Filter by location name")
+    date: str | None = Field(default=None, description="Filter by date (YYYY-MM-DD)")
+    source: str | None = Field(default=None, description="Filter by POS source")
+    channel: str | None = Field(default=None, description="Filter by order channel")
+    payment_type: str | None = Field(default=None, description="Filter by payment type")
+    category: str | None = Field(default=None, description="Filter by product category")
+    limit: int = Field(default=50, ge=1, le=500, description="Maximum items to return")
 
 
 class OrderDetail(BaseModel):
-    order_id: str | None
-    source: str | None
-    channel: str | None
-    location: str | None
-    product: str | None
-    category: str | None
-    quantity: int | None
-    unit_price_cents: int | None
-    item_total_cents: int | None
-    order_total_cents: int | None
-    created_at: str | None
+    """Individual order item detail for drill-down view."""
+
+    order_id: str | None = Field(description="External order ID from source system")
+    source: str | None = Field(description="POS source (toast, doordash, square)")
+    channel: str | None = Field(description="Order channel (dine_in, pickup, delivery)")
+    location: str | None = Field(description="Location name")
+    product: str | None = Field(description="Canonical product name")
+    category: str | None = Field(description="Product category")
+    quantity: int | None = Field(description="Quantity ordered")
+    unit_price_cents: int | None = Field(description="Unit price in cents")
+    item_total_cents: int | None = Field(description="Line item total in cents")
+    order_total_cents: int | None = Field(description="Full order total in cents")
+    created_at: str | None = Field(description="Order timestamp (ISO 8601)")
 
 
 class DrillDownResponse(BaseModel):
-    success: bool = True
-    filters: DrillDownParams
-    count: int
-    orders: list[OrderDetail]
+    """Response from drill-down endpoint."""
+
+    success: bool = Field(default=True, description="Whether the query succeeded")
+    filters: DrillDownParams = Field(description="Applied filter parameters")
+    count: int = Field(description="Number of items returned")
+    orders: list[OrderDetail] = Field(description="Order item details")
 
 
 class ErrorResponse(BaseModel):
-    error: str
-    code: str
-    retryable: bool = False
+    """Standard error response format."""
+
+    error: str = Field(description="Human-readable error message")
+    code: str = Field(description="Machine-readable error code")
+    retryable: bool = Field(default=False, description="Whether the request can be retried")
 
 
 class HealthResponse(BaseModel):
-    status: str
-    timestamp: datetime
+    """Health check response."""
+
+    status: str = Field(description="Health status ('ok' if healthy)")
+    timestamp: datetime = Field(description="Current server timestamp")

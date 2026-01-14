@@ -1,7 +1,8 @@
 -- ============================================================
--- Schema Permissions
+-- Core Schema: Tables, Constraints, RLS, and Grants
 -- ============================================================
 
+-- Schema Permissions
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated;
@@ -20,7 +21,7 @@ CREATE TABLE IF NOT EXISTS locations (
     state TEXT,
     zip_code TEXT,
     country TEXT DEFAULT 'US',
-    location_type TEXT CHECK (location_type IN ('downtown', 'airport', 'mall', 'university')),
+    location_type TEXT,
     timezone TEXT DEFAULT 'America/New_York',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -39,10 +40,10 @@ CREATE TABLE IF NOT EXISTS orders (
     source TEXT NOT NULL CHECK (source IN ('toast', 'doordash', 'square')),
     location_id UUID NOT NULL REFERENCES locations(id),
     channel TEXT NOT NULL CHECK (channel IN ('dine_in', 'pickup', 'delivery')),
-    subtotal_cents INTEGER NOT NULL CHECK (subtotal_cents >= 0),
+    sales_cents INTEGER NOT NULL CHECK (sales_cents >= 0),
     tax_cents INTEGER NOT NULL DEFAULT 0 CHECK (tax_cents >= 0),
     tip_cents INTEGER NOT NULL DEFAULT 0 CHECK (tip_cents >= 0),
-    total_cents INTEGER GENERATED ALWAYS AS (subtotal_cents + tax_cents + tip_cents) STORED,
+    total_cents INTEGER GENERATED ALWAYS AS (sales_cents + tax_cents + tip_cents) STORED,
     delivery_fee_cents INTEGER DEFAULT 0,
     service_fee_cents INTEGER DEFAULT 0,
     commission_cents INTEGER DEFAULT 0,
@@ -94,11 +95,6 @@ ALTER TABLE locations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "Public read access" ON locations;
-DROP POLICY IF EXISTS "Public read access" ON products;
-DROP POLICY IF EXISTS "Public read access" ON orders;
-DROP POLICY IF EXISTS "Public read access" ON order_items;
 
 CREATE POLICY "Public read access" ON locations FOR SELECT USING (true);
 CREATE POLICY "Public read access" ON products FOR SELECT USING (true);

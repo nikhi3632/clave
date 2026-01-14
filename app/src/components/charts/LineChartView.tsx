@@ -12,6 +12,19 @@ import {
 } from "recharts";
 import { ValueFormat, DrillDownFilters, DrillDownConfig } from "@/types";
 import {
+  chartMargins,
+  lineStyles,
+  getTooltipContentStyle,
+  getTooltipLabelStyle,
+  getTooltipItemStyle,
+  getAxisTickStyle,
+  getAxisLineStyle,
+  getYAxisLabelStyle,
+  getLegendTextStyle,
+  getDotStyle,
+  getActiveDotStyle,
+} from "@/styles/charts";
+import {
   getChartColors,
   createFormatter,
   createTickFormatter,
@@ -41,16 +54,13 @@ export function LineChartView({
   const formatValue = createFormatter(valueFormat);
   const formatTick = createTickFormatter(valueFormat);
   const unitLabel = getUnitLabel(valueFormat, yAxis);
-
-  // Check if drill-down is enabled
   const isDrillDownEnabled = drillDown?.enabled && onDataClick;
 
-  // Build drill-down filters from data point using LLM-provided config
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handleDotClick = (entry: any) => {
+  const handleDotClick = (entry: Record<string, unknown>) => {
     if (!isDrillDownEnabled || !drillDown?.type || !drillDown?.column) return;
 
-    const value = entry[drillDown.column] || entry?.payload?.[drillDown.column];
+    const payload = entry?.payload as Record<string, unknown> | undefined;
+    const value = entry[drillDown.column] || payload?.[drillDown.column];
     if (value === null || value === undefined || value === "") return;
 
     const filters: DrillDownFilters = {};
@@ -77,6 +87,12 @@ export function LineChartView({
         break;
     }
 
+    // Include summary SQL for 100% accurate drill-down
+    if (drillDown.summarySQL) {
+      filters.summarySQL = drillDown.summarySQL;
+      filters.summaryLabel = drillDown.summaryLabel;
+    }
+
     if (Object.keys(filters).length > 0) {
       onDataClick(filters);
     }
@@ -84,18 +100,18 @@ export function LineChartView({
 
   return (
     <ResponsiveContainer width="100%" height={300}>
-      <LineChart data={data} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+      <LineChart data={data} margin={chartMargins}>
         <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
         <XAxis
           dataKey={xAxis}
-          tick={{ fontSize: 12, fill: colors.tick }}
-          tickLine={{ stroke: colors.axis }}
-          axisLine={{ stroke: colors.axis }}
+          tick={getAxisTickStyle(colors)}
+          tickLine={getAxisLineStyle(colors)}
+          axisLine={getAxisLineStyle(colors)}
         />
         <YAxis
-          tick={{ fontSize: 12, fill: colors.tick }}
-          tickLine={{ stroke: colors.axis }}
-          axisLine={{ stroke: colors.axis }}
+          tick={getAxisTickStyle(colors)}
+          tickLine={getAxisLineStyle(colors)}
+          axisLine={getAxisLineStyle(colors)}
           tickFormatter={formatTick}
           label={
             unitLabel
@@ -103,51 +119,37 @@ export function LineChartView({
                   value: unitLabel,
                   angle: -90,
                   position: "insideLeft",
-                  style: { fontSize: 11, fill: colors.labelText },
+                  style: getYAxisLabelStyle(colors),
                 }
               : undefined
           }
         />
         <Tooltip
-          formatter={(value) => [formatValue(value as number), yAxis.replace(/_/g, " ")]}
-          contentStyle={{
-            backgroundColor: colors.tooltipBg,
-            border: `1px solid ${colors.tooltipBorder}`,
-            borderRadius: "8px",
-            boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
-          }}
-          labelStyle={{ fontWeight: 600, color: colors.tooltipLabel }}
-          itemStyle={{ color: colors.tooltipLabel }}
+          formatter={(value) => [formatValue(value as number), yAxis.replace(/_cents$/i, "").replace(/_/g, " ")]}
+          contentStyle={getTooltipContentStyle(colors)}
+          labelStyle={getTooltipLabelStyle(colors)}
+          itemStyle={getTooltipItemStyle(colors)}
         />
         <Legend
           verticalAlign="top"
           height={36}
           formatter={(value) => (
-            <span style={{ color: colors.legendText, fontSize: "14px", textTransform: "capitalize" }}>
-              {value.replace(/_/g, " ")}
-            </span>
+            <span style={getLegendTextStyle(colors)}>{value.replace(/_cents$/i, "").replace(/_/g, " ")}</span>
           )}
         />
         <Line
           type="monotone"
           dataKey={yAxis}
-          stroke="#3b82f6"
-          strokeWidth={2.5}
-          dot={{
-            r: 4,
-            fill: "#3b82f6",
-            strokeWidth: 2,
-            stroke: colors.dotStroke,
-            cursor: isDrillDownEnabled ? "pointer" : "default",
-          }}
+          stroke={lineStyles.stroke}
+          strokeWidth={lineStyles.strokeWidth}
+          dot={getDotStyle(colors, !!isDrillDownEnabled)}
           activeDot={{
-            r: 6,
-            fill: "#3b82f6",
-            strokeWidth: 2,
-            stroke: colors.dotStroke,
-            cursor: isDrillDownEnabled ? "pointer" : "default",
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            onClick: (_: any, payload: any) => handleDotClick(payload?.payload || payload),
+            ...getActiveDotStyle(colors, !!isDrillDownEnabled),
+            onClick: (_event, payload) => {
+              const p = payload as unknown as Record<string, unknown>;
+              const data = (p?.payload as Record<string, unknown>) || p;
+              handleDotClick(data);
+            },
           }}
         />
       </LineChart>

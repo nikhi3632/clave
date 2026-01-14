@@ -11,7 +11,8 @@ from services import (
     LLMError,
     execute_query,
     get_data_date_range,
-    process_query,
+    get_schema_info,
+    process_query_with_retry,
     validate_chart_type,
 )
 
@@ -20,23 +21,37 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["query"])
 
 
-@router.get("/query", response_model=HealthResponse)
+@router.get(
+    "/query",
+    response_model=HealthResponse,
+    summary="Health Check",
+    description="Returns the current health status and timestamp of the API.",
+)
 async def health_check():
-    """Health check endpoint."""
+    """
+    Health check endpoint.
+
+    Returns:
+        HealthResponse: Status "ok" with current timestamp if the API is healthy.
+    """
     return HealthResponse(status="ok", timestamp=datetime.now())
 
 
 async def _process_query_internal(user_query: str) -> dict:
     """Internal query processing with LLM and database calls."""
-    # Process with LLM
-    llm_result = await process_query(user_query)
+    # Process with LLM and automatic retry on SQL errors
+    llm_result, data = await process_query_with_retry(
+        user_query,
+        execute_fn=execute_query,
+        max_attempts=2,
+    )
 
-    # Execute SQL and get date range
-    data = await execute_query(llm_result.sql)
+    # Get date range and schema for chart validation
     date_range = await get_data_date_range()
+    schema = await get_schema_info()
 
     # Validate and potentially correct chart type based on actual result shape
-    validated_result = validate_chart_type(data, llm_result)
+    validated_result = validate_chart_type(data, llm_result, schema)
 
     # Build drill-down config for response
     drill_down = None
@@ -45,6 +60,8 @@ async def _process_query_internal(user_query: str) -> dict:
             "enabled": validated_result.drill_down.enabled,
             "type": validated_result.drill_down.type,
             "column": validated_result.drill_down.column,
+            "summarySQL": validated_result.drill_down.summary_sql,
+            "summaryLabel": validated_result.drill_down.summary_label,
         }
 
     return {
@@ -68,10 +85,66 @@ async def _process_query_internal(user_query: str) -> dict:
 @router.post(
     "/query",
     response_model=QueryResponse,
-    responses={400: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+    summary="Process Natural Language Query",
+    description="""
+    Accepts a natural language question about restaurant analytics and returns:
+    - Generated SQL query
+    - Query results data
+    - Recommended chart type and configuration
+    - Human-readable summary
+
+    **Example queries:**
+    - "Show me sales by location"
+    - "What were the top 5 selling products?"
+    - "Compare delivery vs dine-in sales"
+    - "Graph daily sales trend"
+    """,
+    responses={
+        200: {
+            "description": "Query processed successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "success": True,
+                        "query": "Show me sales by location",
+                        "sql": "SELECT location, SUM(sales_cents) FROM daily_sales GROUP BY 1",
+                        "chartType": "bar",
+                        "title": "Sales by Location",
+                        "xAxis": "location",
+                        "yAxis": "sales",
+                        "valueFormat": "currency",
+                        "summary": "Downtown leads with $12,450 in sales",
+                        "data": [{"location": "Downtown", "sales": 1245000}],
+                        "dataRange": "January 1-4, 2025",
+                        "drillDown": {"enabled": True, "type": "location", "column": "location"},
+                    }
+                }
+            },
+        },
+        400: {"model": ErrorResponse, "description": "Invalid input query"},
+        503: {"model": ErrorResponse, "description": "LLM service unavailable"},
+        504: {"model": ErrorResponse, "description": "Request timed out"},
+    },
 )
 async def query(request: QueryRequest):
-    """Process a natural language query and return SQL + visualization data."""
+    """
+    Process a natural language query and return SQL + visualization data.
+
+    The query is processed through Claude to generate SQL, which is then executed
+    against the database. The LLM also determines the appropriate chart type
+    and configuration based on the query intent and result shape.
+
+    Args:
+        request: QueryRequest containing the natural language query string.
+
+    Returns:
+        QueryResponse with SQL, data, chart configuration, and summary.
+
+    Raises:
+        HTTPException 400: If the query is invalid or cannot be processed.
+        HTTPException 503: If the LLM service is unavailable.
+        HTTPException 504: If the request times out.
+    """
     user_query = request.query.strip()
     settings = get_settings()
 

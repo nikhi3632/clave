@@ -66,7 +66,7 @@ class Order(BaseModel):
     location: str = Field(min_length=1)  # Dynamic location name from source data
     channel: Channel
     # Financial fields
-    subtotal_cents: int = Field(ge=0)
+    sales_cents: int = Field(ge=0)
     tax_cents: int = Field(ge=0, default=0)
     tip_cents: int = Field(ge=0, default=0)
     # Delivery platform fees (DoorDash)
@@ -106,7 +106,7 @@ class Order(BaseModel):
 
     @property
     def total_cents(self) -> int:
-        return self.subtotal_cents + self.tax_cents + self.tip_cents
+        return self.sales_cents + self.tax_cents + self.tip_cents
 
 
 class Product(BaseModel):

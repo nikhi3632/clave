@@ -8,6 +8,8 @@ export interface DrillDownConfig {
   enabled: boolean;
   type?: DrillDownType;
   column?: string;
+  summarySQL?: string; // SQL to calculate drill-down summary (same logic as chart)
+  summaryLabel?: string; // Display label for summary value
 }
 
 // Widget data structure
@@ -62,6 +64,8 @@ export interface DrillDownFilters {
   channel?: string;
   payment_type?: string;
   category?: string;
+  summarySQL?: string;
+  summaryLabel?: string;
 }
 
 // Chart component props
@@ -77,3 +81,4 @@ export interface ChartProps {
   drillDown?: DrillDownConfig;
   onDataClick?: (filters: DrillDownFilters) => void;
 }
+

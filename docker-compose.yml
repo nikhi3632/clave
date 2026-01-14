@@ -1,6 +1,8 @@
 services:
   api:
-    build: ./api
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -27,7 +29,9 @@ services:
       - api
 
   seed:
-    build: ./etl
+    build:
+      context: .
+      dockerfile: etl/Dockerfile
     volumes:
       - ./data:/data
       - ./supabase:/supabase

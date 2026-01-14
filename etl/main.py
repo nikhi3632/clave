@@ -92,8 +92,8 @@ class GracefulShutdown:
         for sig, handler in self._original_handlers.items():
             try:
                 signal.signal(sig, handler)
-            except Exception:
-                pass
+            except (OSError, ValueError) as e:
+                logger.debug(f"Could not restore signal handler for {sig}: {e}")
 
     def check_or_raise(self) -> None:
         """Raise KeyboardInterrupt if shutdown requested."""
@@ -256,8 +256,8 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
 
             except ExtractionError as e:
                 logger.error(f"Extraction failed for {source_name}: {e}")
-            except Exception:
-                logger.exception(f"Unexpected error processing {source_name}")
+            except Exception as e:
+                logger.exception(f"Unexpected error processing {source_name}: {e}")
 
             extracted += source_extracted
             logger.info(
@@ -304,9 +304,9 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
             except LoadError as e:
                 failed += 1
                 logger.warning(f"Failed to load order {order.external_id}: {e}")
-            except Exception:
+            except Exception as e:
                 failed += 1
-                logger.exception(f"Unexpected error loading order {order.external_id}")
+                logger.exception(f"Unexpected error loading order {order.external_id}: {e}")
 
         # Refresh materialized views (only if completed successfully)
         if not shutdown.should_stop:

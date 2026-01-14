@@ -6,8 +6,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y postgresql-client && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-COPY pyproject.toml .
-RUN pip install --no-cache-dir -e .
+COPY etl/pyproject.toml .
+RUN pip install --no-cache-dir .
+
+# Copy shared llm module
+COPY llm/ ./llm/
 
 # Copy ETL code
-COPY . .
+COPY etl/ .

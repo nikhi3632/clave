@@ -35,8 +35,10 @@ export function createFormatter(format?: ValueFormat) {
     if (typeof value !== "number") return String(value);
 
     switch (format) {
-      case "currency":
-        return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      case "currency": {
+        const dollars = value / 100;
+        return `$${dollars.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      }
       case "percent":
         return `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
       case "number":
@@ -50,10 +52,12 @@ export function createFormatter(format?: ValueFormat) {
 export function createTickFormatter(format?: ValueFormat) {
   return (value: number): string => {
     switch (format) {
-      case "currency":
-        if (value >= 1000000) return `$${(value / 1000000).toFixed(1)}M`;
-        if (value >= 1000) return `$${(value / 1000).toFixed(1)}K`;
-        return `$${value.toFixed(0)}`;
+      case "currency": {
+        const dollars = value / 100;
+        if (dollars >= 1000000) return `$${(dollars / 1000000).toFixed(1)}M`;
+        if (dollars >= 1000) return `$${(dollars / 1000).toFixed(1)}K`;
+        return `$${dollars.toFixed(0)}`;
+      }
       case "percent":
         return `${value}%`;
       case "number":

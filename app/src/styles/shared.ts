@@ -91,3 +91,37 @@ export const statCardStyles = {
   value: "text-2xl font-bold text-slate-900 dark:text-zinc-100",
   label: "text-sm text-slate-500 dark:text-zinc-400",
 };
+
+// Theme toggle button
+export const themeToggleStyles = {
+  button: [
+    "p-2 rounded-lg transition-colors",
+    "bg-slate-100 dark:bg-zinc-800",
+    "text-slate-600 dark:text-zinc-400",
+    "hover:bg-slate-200 dark:hover:bg-zinc-700",
+  ].join(" "),
+  icon: "w-5 h-5",
+};
+
+// Error boundary fallback UI
+export const errorBoundaryStyles = {
+  container: "min-h-[200px] flex items-center justify-center p-8",
+  card: [
+    "bg-red-50 dark:bg-red-950",
+    "border border-red-200 dark:border-red-800",
+    "rounded-2xl p-6 max-w-md w-full text-center",
+  ].join(" "),
+  iconWrapper: [
+    "w-12 h-12 rounded-full mx-auto mb-4",
+    "bg-red-100 dark:bg-red-900",
+    "flex items-center justify-center",
+  ].join(" "),
+  icon: "w-6 h-6 text-red-500 dark:text-red-400",
+  title: "text-lg font-semibold text-red-800 dark:text-red-200 mb-2",
+  message: "text-sm text-red-600 dark:text-red-400 mb-4",
+  retryBtn: [
+    "px-4 py-2 rounded-lg text-sm font-medium transition-colors",
+    "bg-red-600 text-white hover:bg-red-700",
+    "dark:bg-red-700 dark:hover:bg-red-600",
+  ].join(" "),
+};

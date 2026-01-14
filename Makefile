@@ -1,4 +1,4 @@
-.PHONY: help up down build logs clean seed reset review review-stats lint lint-fix typecheck
+.PHONY: help up down build logs clean setup migrate reset review review-stats lint lint-fix typecheck
 .DEFAULT_GOAL := help
 
 help:
@@ -9,8 +9,9 @@ help:
 	@echo "Commands:"
 	@echo "  make up           Start all services"
 	@echo "  make down         Stop all services"
-	@echo "  make seed         Run migrations + ETL (first-time setup)"
-	@echo "  make reset        Reset database and re-seed"
+	@echo "  make setup        Run migrations + ETL (first-time setup)"
+	@echo "  make migrate      Run migrations only (no ETL)"
+	@echo "  make reset        Drop all tables and re-run setup"
 	@echo "  make review       Interactive category review CLI"
 	@echo "  make review-stats Show category classification stats"
 	@echo "  make build        Rebuild containers"
@@ -24,8 +25,11 @@ help:
 up:
 	docker compose up --build
 
-seed:
+setup:
 	docker compose run --rm seed
+
+migrate:
+	docker compose run --rm seed sh -c 'for f in /supabase/migrations/*.sql; do echo "Applying $$f..."; psql "$$DATABASE_URL" -f "$$f" -q; done'
 
 reset:
 	docker compose build seed

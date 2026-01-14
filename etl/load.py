@@ -345,7 +345,7 @@ class Loader:
             "location_id": location_id,
             "channel": order.channel.value,
             # Financial fields
-            "subtotal_cents": order.subtotal_cents,
+            "sales_cents": order.sales_cents,
             "tax_cents": order.tax_cents,
             "tip_cents": order.tip_cents,
             "delivery_fee_cents": order.delivery_fee_cents,

@@ -47,6 +47,12 @@ export function TableView({ data, valueFormat, drillDown, onDataClick }: TableVi
         break;
     }
 
+    // Include summary SQL for 100% accurate drill-down
+    if (drillDown.summarySQL) {
+      filters.summarySQL = drillDown.summarySQL;
+      filters.summaryLabel = drillDown.summaryLabel;
+    }
+
     if (Object.keys(filters).length > 0) {
       onDataClick(filters);
     }
@@ -59,7 +65,7 @@ export function TableView({ data, valueFormat, drillDown, onDataClick }: TableVi
           <tr>
             {columns.map((col) => (
               <th key={col} className={styles.th}>
-                {col.replace(/_/g, " ")}
+                {col.replace(/_cents$/i, "").replace(/_/g, " ")}
               </th>
             ))}
           </tr>
@@ -75,10 +81,23 @@ export function TableView({ data, valueFormat, drillDown, onDataClick }: TableVi
                 const cellValue = row[col];
                 const isNumeric = typeof cellValue === "number";
                 const colLower = col.toLowerCase();
-                const cellFormat =
-                  colLower.includes("revenue") ||
+                // Determine format based on column name
+                // Count/quantity columns → plain number
+                // Currency columns (_cents, revenue, price, tax, tip) → currency
+                const isCountColumn =
+                  colLower.includes("units") ||
+                  colLower.includes("count") ||
+                  colLower.includes("quantity") ||
+                  colLower.includes("orders");
+                const isCurrencyColumn =
+                  colLower.endsWith("_cents") ||
+                  colLower.includes("sales") ||
                   colLower.includes("price") ||
-                  colLower.includes("total")
+                  colLower.includes("tax") ||
+                  colLower.includes("tip");
+                const cellFormat = isCountColumn
+                  ? "number"
+                  : isCurrencyColumn
                     ? "currency"
                     : valueFormat;
                 return (

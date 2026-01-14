@@ -2,31 +2,29 @@ import asyncio
 import json
 import logging
 import re
+import sys
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
-
-import anthropic
 
 from config import get_settings
 
-from .database import SchemaInfo, get_schema_info
+# Add project root to path for shared llm module (for local dev)
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from llm import APIError, LLMError, RateLimitError, get_provider  # noqa: E402
+
+from .database import SchemaInfo, ViewMetadata, get_schema_info  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 
-class LLMError(Exception):
-    """Custom error for LLM operations."""
-
-    def __init__(self, message: str, code: str, retryable: bool = False):
-        super().__init__(message)
-        self.code = code
-        self.retryable = retryable
-
-
 ChartType = Literal["bar", "line", "pie", "table", "metric", "info"]
 ValueFormat = Literal["currency", "number", "percent"]
-DrillDownType = Literal["location", "date", "product", "category", "source", "channel"]
+# DrillDownType is now validated dynamically against schema.dimensions
 
 
 @dataclass
@@ -34,8 +32,10 @@ class DrillDownConfig:
     """Configuration for drill-down functionality."""
 
     enabled: bool
-    type: DrillDownType | None = None
+    type: str | None = None  # Validated against schema.dimensions at runtime
     column: str | None = None
+    summary_sql: str | None = None  # SQL query to calculate drill-down summary (same logic as chart)
+    summary_label: str | None = None  # Display label for the summary value
 
 
 @dataclass
@@ -90,156 +90,193 @@ def _format_table_schema(name: str, columns: list[dict[str, str]], comments: dic
         comment_key = f"{name}.{col['column']}"
         comment = comments.get(comment_key, "")
         if comment:
-            lines.append(f"- {col['column']}: {col_type} — {comment}")
+            # Extract just first line of comment for brevity
+            first_line = comment.split("\n")[0].strip()
+            lines.append(f"- {col['column']}: {col_type} — {first_line}")
         else:
             lines.append(f"- {col['column']}: {col_type}")
     return "\n".join(lines)
 
 
-def _format_view_schema(name: str, columns: list[dict[str, str]], view_comments: dict[str, str]) -> str:
-    """Format a view's columns as markdown with view-level comment."""
-    comment = view_comments.get(name, "")
-    header = f"**{name}**" + (f" — {comment}" if comment else "")
-    col_lines = [f"- {c['column']}: {_simplify_pg_type(c['type'])}" for c in columns]
-    return header + "\n" + "\n".join(col_lines)
+def _format_view_from_metadata(view: ViewMetadata, column_comments: dict[str, str]) -> str:
+    """Format a view using parsed metadata."""
+    lines = [f"**{view.name}**"]
+
+    # Add purpose if available
+    if view.purpose:
+        lines[0] += f" — {view.purpose}"
+
+    # Add use_for hint
+    if view.use_for:
+        lines.append(f"  USE FOR: {view.use_for}")
+
+    # Add dimensions and metrics
+    if view.dimensions:
+        lines.append(f"  DIMENSIONS: {', '.join(view.dimensions)}")
+    if view.metrics:
+        lines.append(f"  METRICS: {', '.join(view.metrics)}")
+
+    # Add columns with their comments (show synonyms)
+    lines.append("  Columns:")
+    for col in view.columns:
+        col_type = _simplify_pg_type(col["type"])
+        comment_key = f"{view.name}.{col['column']}"
+        comment = column_comments.get(comment_key, "")
+
+        col_line = f"    - {col['column']}: {col_type}"
+        if comment:
+            # Extract synonyms if present
+            if "SYNONYMS:" in comment.upper():
+                import re
+                match = re.search(r"SYNONYMS:\s*([^\n]+)", comment, re.IGNORECASE)
+                if match:
+                    col_line += f" (synonyms: {match.group(1).strip()})"
+        lines.append(col_line)
+
+    return "\n".join(lines)
+
+
+def _generate_dimensions_section(schema: SchemaInfo) -> str:
+    """Generate dimensions documentation from database metadata."""
+    lines = []
+    for name, dim in sorted(schema.dimensions.items()):
+        values_preview = ", ".join(dim.values[:5]) if dim.values else "none"
+        if len(dim.values) > 5:
+            values_preview += f", ... ({len(dim.values)} total)"
+        lines.append(f"- **{name}**: {values_preview}")
+        if dim.filter_pattern:
+            lines.append(f"  Filter: {dim.filter_pattern}")
+    return "\n".join(lines)
+
+
+def _generate_views_section(schema: SchemaInfo) -> str:
+    """Generate views documentation from parsed metadata."""
+    lines = []
+    for name, view in sorted(schema.views.items()):
+        lines.append(_format_view_from_metadata(view, schema.column_comments))
+    return "\n\n".join(lines)
 
 
 def build_schema_context(schema: SchemaInfo) -> str:
     """Build dynamic schema context from database introspection."""
-    locations_str = ", ".join(schema.locations) if schema.locations else "No locations"
-    sources_str = ", ".join(schema.sources) if schema.sources else "No sources"
-    channels_str = ", ".join(schema.channels) if schema.channels else "No channels"
-    categories_str = ", ".join(schema.categories) if schema.categories else "No categories"
-    payment_types_str = ", ".join(schema.payment_types) if schema.payment_types else "No payment types"
-
     # Format tables with comments
     tables_md = "\n\n".join(
         _format_table_schema(name, cols, schema.column_comments)
         for name, cols in sorted(schema.tables.items())
     )
 
-    # Format views with comments
-    views_md = "\n\n".join(
-        _format_view_schema(name, cols, schema.view_comments)
-        for name, cols in sorted(schema.views.items())
-    )
+    # Format views from parsed metadata
+    views_md = _generate_views_section(schema)
 
-    return f"""You are an analytics assistant for a restaurant chain.
-Locations: {locations_str}
+    # Generate dimensions section
+    dimensions_md = _generate_dimensions_section(schema)
+
+    # Generate valid drill-down types from dimensions
+    drill_down_types = ", ".join(f'"{d}"' for d in schema.dimensions.keys())
+
+    return f"""You are an analytics assistant.
 Data range: {schema.date_range.formatted}
-POS sources: {sources_str}
 
-## Database Schema
+## Available Dimensions
+{dimensions_md}
 
-### Tables
-Column comments contain synonyms and business rules - follow them.
-
+## Base Tables
 {tables_md}
 
-### Materialized Views (USE THESE FOR FASTER QUERIES)
+## Analytics Views (USE THESE FOR QUERIES)
+Each view shows its PURPOSE, what it's useful FOR, available DIMENSIONS and METRICS.
+Column synonyms show alternative terms users might use.
 
 {views_md}
 
-## Dynamic Values (from actual data)
-- Locations: {locations_str}
-- Sources: {sources_str}
-- Channels: {channels_str}
-- Categories: {categories_str}
-- Payment types: {payment_types_str}
+## Query Generation Principles
 
-## Date Handling (CRITICAL)
-- The AVAILABLE DATA RANGE will be provided in each query context
-- The CURRENT DATE will also be provided in each query context
+### Finding the Right View
+1. Read each view's PURPOSE to understand what it's optimized for
+2. Match your query goal to a view's "USE FOR" hints
+3. Check that the view has the DIMENSIONS and METRICS you need
+4. Prefer views over base tables for aggregations
 
-### When user asks about dates:
-1. **Date IN the available range** → Generate normal SQL query
-2. **Date OUTSIDE the available range** → Return an info response
+### Column Selection
+1. Column comments show SYNONYMS - map user terms to actual column names
+2. Look for the column whose synonyms best match what the user asked for
+3. If user says "revenue" or "sales", look for columns with those synonyms
 
-### If date is outside the available range, respond with:
-- sql: "SELECT 1 as placeholder WHERE false"
-- chartType: "info"
-- title: "Date Outside Available Range"
-- summary: MUST include the actual available dates and helpful suggestions.
+### Currency
+- Monetary values stored in cents (integers)
+- Return raw cents in SQL - frontend handles formatting
+- Do NOT divide by 100 in queries
+
+### Drill-Down SQL (summarySQL)
+1. For summarySQL, use base tables (orders, order_items) with appropriate joins
+2. Check dimension info above for FILTER patterns
+3. Use :filter_value as placeholder for the clicked dimension value
+4. Return a single row with column named "value" (in cents for monetary values)
+5. Valid drill-down types: {drill_down_types}, "date"
+
+### Date Handling
+- Available data: {schema.date_range.min_date} to {schema.date_range.max_date}
+- No date specified → Query ALL available data
+- Relative date (yesterday, last week) → Calculate from current date
+- Date outside range → Return info response with available dates
 """
 
 CHART_SELECTION_GUIDELINES = """
-## Chart Type Selection Guidelines
+## Chart Type Selection
 
-Choose the visualization based on the DATA SEMANTICS and what would best communicate the insight:
+Choose based on data semantics:
 
-### METRIC - Single aggregate value
-- Use when the result is ONE number (total revenue, count of orders, average value)
-- Result shape: 1 row, 1-2 columns
-
-### LINE - Time series data
-- Use when showing how values change over time (hourly, daily, weekly patterns)
-- Result shape: multiple rows with a time/date column
-
-### BAR - Categorical comparisons
-- Use when comparing values across discrete categories (locations, products, channels)
-- Result shape: multiple rows with a category column and value column
-
-### PIE - Part-of-whole relationships
-- Use when showing how parts contribute to a total (percentage breakdowns)
-- Best for 2-7 categories; avoid for many categories
-- Result shape: multiple rows with category and percentage/count
-
-### TABLE - Detailed data
-- Use when showing multi-dimensional data or raw records
-- Result shape: multiple rows and columns with mixed data types
-
-Use your judgment for ambiguous cases. The system will validate your choice against the actual result shape.
+- **METRIC**: Single aggregate value (1 row, 1-2 columns)
+- **LINE**: Time series data (multiple rows with date/hour column)
+- **BAR**: Categorical comparisons (multiple rows with category + value)
+- **PIE**: Part-of-whole (2-7 categories)
+- **TABLE**: Multi-dimensional or detailed data
 """
 
 TASK_PROMPT = """
 ## Your Task
 
-Given a user's natural language query about restaurant analytics, return a JSON object with:
-1. sql: A valid PostgreSQL SELECT query using the schema above
-2. chartType: One of "bar", "line", "pie", "table", "metric" (follow the Chart Selection Guidelines above)
-3. title: A short title for the visualization
-4. xAxis: Column name for x-axis (bar/line charts)
-5. yAxis: Column name for y-axis (bar/line charts)
-6. dataKey: Column name for values (pie charts)
-7. nameKey: Column name for labels (pie charts)
-8. valueFormat: One of "currency" (for revenue/dollars), "number" (for counts/quantities), "percent" (for percentages)
-9. summary: A 1-2 sentence insight about what the data shows
-10. drillDown: Object for drill-down when user clicks a data point:
-    - enabled: true if clicking should show underlying order details, false otherwise
-    - type: one of "location", "date", "product", "category", "source", "channel" (the dimension to filter by)
-    - column: which result column contains the value to filter by
+Return a JSON object with:
+1. **sql**: PostgreSQL SELECT query using the views/tables above
+2. **chartType**: "bar", "line", "pie", "table", or "metric"
+3. **title**: Short title for the visualization
+4. **xAxis/yAxis**: Column names for bar/line charts
+5. **dataKey/nameKey**: Column names for pie charts
+6. **valueFormat**: "currency", "number", or "percent"
+7. **summary**: 1-2 sentence insight
+8. **drillDown**: Configuration for clicking data points:
+   - enabled: true if dimension is drillable
+   - type: the dimension name from Available Dimensions above
+   - column: which result column contains the filter value
+   - summarySQL: Query returning single row with "value" column, using :filter_value placeholder
+   - summaryLabel: Display label for the value
 
-SQL Rules:
-- Always use the materialized views when possible
-- Convert cents to dollars in the SQL (divide by 100.0)
-- Round dollar amounts to 2 decimal places
-- Use descriptive column aliases
+## SQL Principles
 
-## Drill-Down Guidelines
+1. **Use views for aggregations** - they're pre-optimized
+2. **Return raw values** - do not convert cents to dollars in SQL
+3. **Use column synonyms** - check column comments for alternative names
+4. **Descriptive aliases** - name columns clearly
 
-Enable drill-down when the query groups by a filterable dimension:
-- location → drillDown: { enabled: true, type: "location", column: "location" }
-- date/day → drillDown: { enabled: true, type: "date", column: "date" }
-- product → drillDown: { enabled: true, type: "product", column: "product" }
-- category → drillDown: { enabled: true, type: "category", column: "category" }
-- source → drillDown: { enabled: true, type: "source", column: "source" }
-- channel → drillDown: { enabled: true, type: "channel", column: "channel" }
+## Drill-Down Principles
 
-Disable drill-down for:
-- Single metrics (total revenue, count) → drillDown: { enabled: false }
-- Complex aggregations without clear dimension → drillDown: { enabled: false }
-- Time series (hourly/daily trends) can use date drill-down
+1. **Enable when grouped by a dimension** - location, product, date, etc.
+2. **summarySQL must match main query logic** - same aggregation, filtered
+3. **Use base tables for summarySQL** - orders, order_items with joins
+4. **Check dimension FILTER patterns** - use the pattern shown in Available Dimensions
+5. **Return value in cents** - frontend formats it
+6. **Disable for single metrics** - no dimension to filter by
 
-## Handling Non-Analytics Queries
+## Non-Analytics Queries
 
-If the user's query is NOT about restaurant analytics (greetings, off-topic questions, etc.):
-- Set sql to: SELECT 1 as placeholder WHERE false
-- Set chartType to: "info"
-- Set title to: "Welcome to Restaurant Analytics"
-- Set summary to a helpful message explaining what queries are supported, with 2-3 examples
-- Set drillDown to: { enabled: false }
+For greetings or off-topic:
+- sql: "SELECT 1 as placeholder WHERE false"
+- chartType: "info"
+- title: "Welcome"
+- summary: Helpful message with example queries
+- drillDown: { enabled: false }
 
-Return ONLY valid JSON, no markdown code blocks or explanation."""
+Return ONLY valid JSON, no markdown or explanation."""
 
 
 def build_system_prompt(schema: SchemaInfo) -> str:
@@ -330,18 +367,36 @@ def _parse_response(text: str) -> LLMResult:
         enabled = drill_down_data.get("enabled", False)
         dd_type = drill_down_data.get("type")
         dd_column = drill_down_data.get("column")
+        summary_sql = drill_down_data.get("summarySQL")
+        summary_label = drill_down_data.get("summaryLabel")
 
-        # Validate drill-down type
-        valid_types = {"location", "date", "product", "category", "source", "channel"}
-        if dd_type and dd_type not in valid_types:
+        # Drill-down type validation is now dynamic
+        # Accept any string type - validated at runtime against schema.dimensions
+        if dd_type and not isinstance(dd_type, str):
             dd_type = None
             enabled = False
+
+        # Validate summarySQL if provided
+        if summary_sql:
+            try:
+                _validate_sql(summary_sql)
+            except LLMError:
+                logger.warning(f"Invalid summarySQL, disabling: {summary_sql}")
+                summary_sql = None
 
         drill_down = DrillDownConfig(
             enabled=enabled,
             type=dd_type if enabled else None,
             column=dd_column if enabled else None,
+            summary_sql=summary_sql if enabled else None,
+            summary_label=summary_label if enabled else None,
         )
+
+    # Validate value_format
+    value_format = data.get("valueFormat")
+    valid_formats = {"currency", "number", "percent"}
+    if value_format not in valid_formats:
+        value_format = None
 
     return LLMResult(
         sql=data["sql"],
@@ -351,7 +406,7 @@ def _parse_response(text: str) -> LLMResult:
         y_axis=data.get("yAxis"),
         data_key=data.get("dataKey"),
         name_key=data.get("nameKey"),
-        value_format=data.get("valueFormat"),
+        value_format=value_format,
         summary=data.get("summary", "Query executed successfully."),
         drill_down=drill_down,
     )
@@ -360,17 +415,18 @@ def _parse_response(text: str) -> LLMResult:
 async def _call_llm_with_retry(user_query: str, retry_count: int = 0) -> str:
     """Call LLM with retry logic."""
     settings = get_settings()
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    provider = get_provider(
+        api_key=settings.anthropic_api_key,
+        model=settings.llm_model,
+        provider=settings.llm_provider,
+    )
 
     try:
         current_date = _get_current_date_context()
         schema = await get_schema_info()
         system_prompt = build_system_prompt(schema)
 
-        response = client.messages.create(
-            model=settings.llm_model,
-            max_tokens=1024,
-            system=system_prompt,
+        response = await provider.complete(
             messages=[
                 {
                     "role": "user",
@@ -383,44 +439,30 @@ User query: "{user_query}"
 Return the JSON object with sql, chartType, title, xAxis/yAxis or dataKey/nameKey, and summary.""",
                 }
             ],
+            system=system_prompt,
+            max_tokens=1024,
         )
 
-        content = response.content[0]
-        if content.type != "text":
-            raise LLMError("Unexpected response type from LLM", "INVALID_RESPONSE", True)
+        return response.content
 
-        return content.text
-
-    except anthropic.RateLimitError:
+    except RateLimitError:
         if retry_count < settings.llm_max_retries:
             delay = settings.llm_initial_retry_delay * (2**retry_count)
             await asyncio.sleep(delay)
             return await _call_llm_with_retry(user_query, retry_count + 1)
         raise LLMError("Rate limit exceeded, please try again later", "RATE_LIMIT", False)
 
-    except anthropic.APIStatusError as e:
-        logger.error(f"Anthropic API error {e.status_code}: {e.message}")
-        is_retryable = e.status_code >= 500 or e.status_code == 429
-        if is_retryable and retry_count < settings.llm_max_retries:
+    except APIError as e:
+        if e.retryable and retry_count < settings.llm_max_retries:
             delay = settings.llm_initial_retry_delay * (2**retry_count)
             await asyncio.sleep(delay)
             return await _call_llm_with_retry(user_query, retry_count + 1)
-        raise LLMError(
-            "AI service is temporarily unavailable. Please try again.",
-            f"API_ERROR_{e.status_code}",
-            True,
-        )
-
-    except anthropic.AuthenticationError as e:
-        logger.error(f"Anthropic auth error: {e}")
-        raise LLMError(
-            "Service configuration error. Please contact support.",
-            "AUTH_ERROR",
-            False,
-        )
+        raise
 
 
-def validate_chart_type(data: list[dict], result: LLMResult) -> LLMResult:
+def validate_chart_type(
+    data: list[dict], result: LLMResult, schema: SchemaInfo | None = None
+) -> LLMResult:
     """
     Validate and potentially correct chart type based on actual result shape.
 
@@ -434,9 +476,13 @@ def validate_chart_type(data: list[dict], result: LLMResult) -> LLMResult:
     columns = list(data[0].keys()) if data else []
     columns_lower = [c.lower() for c in columns]
 
-    # Check for time-related columns
-    time_columns = {"date", "day", "hour", "day_name", "week", "month", "created_at"}
-    has_time_column = any(col in time_columns for col in columns_lower)
+    # Check for time-related columns using common patterns
+    # These are semantic indicators that work across schemas
+    time_indicators = {"date", "day", "hour", "week", "month", "year", "time", "created"}
+    has_time_column = any(
+        any(indicator in col for indicator in time_indicators)
+        for col in columns_lower
+    )
 
     # Single value → metric
     if num_rows == 1 and num_cols <= 2:
@@ -457,8 +503,12 @@ def validate_chart_type(data: list[dict], result: LLMResult) -> LLMResult:
     # Time series data → line (unless explicitly table)
     if has_time_column and num_rows > 1 and result.chart_type not in ["line", "table"]:
         # Find the time column and value column
-        time_col = next((c for c in columns if c.lower() in time_columns), columns[0])
-        value_col = next((c for c in columns if c.lower() not in time_columns), columns[-1])
+        time_col = next(
+            (c for c in columns if any(t in c.lower() for t in time_indicators)), columns[0]
+        )
+        value_col = next(
+            (c for c in columns if not any(t in c.lower() for t in time_indicators)), columns[-1]
+        )
         return LLMResult(
             sql=result.sql,
             chart_type="line",
@@ -469,7 +519,7 @@ def validate_chart_type(data: list[dict], result: LLMResult) -> LLMResult:
             name_key=None,
             value_format=result.value_format,
             summary=result.summary,
-            drill_down=DrillDownConfig(enabled=True, type="date", column=time_col),
+            drill_down=result.drill_down,  # Preserve original drill-down config
         )
 
     # Too many categories for pie → bar
@@ -505,13 +555,153 @@ def validate_chart_type(data: list[dict], result: LLMResult) -> LLMResult:
     return result
 
 
+async def _call_llm_with_error_context(
+    user_query: str,
+    failed_sql: str,
+    error_message: str,
+) -> str:
+    """Call LLM with error context for self-correction."""
+    settings = get_settings()
+    provider = get_provider(
+        api_key=settings.anthropic_api_key,
+        model=settings.llm_model,
+        provider=settings.llm_provider,
+    )
+
+    current_date = _get_current_date_context()
+    schema = await get_schema_info()
+    system_prompt = build_system_prompt(schema)
+
+    error_context = f"""
+## Correction Needed
+
+Your previous SQL query failed. Please correct it.
+
+**Failed SQL:**
+```sql
+{failed_sql}
+```
+
+**Error:**
+{error_message}
+
+**How to fix:**
+1. Check that all column names exist in the view/table you're querying
+2. Check that table/view names are spelled correctly
+3. Use column synonyms from the schema comments if needed
+4. For sales columns: both views and orders table use 'sales_cents'
+
+Generate a corrected query.
+"""
+
+    response = await provider.complete(
+        messages=[
+            {
+                "role": "user",
+                "content": f"""Context:
+- Current date: {current_date}
+- Available data range: {schema.date_range.formatted} ({schema.date_range.min_date} to {schema.date_range.max_date})
+
+User query: "{user_query}"
+
+{error_context}
+
+Return the corrected JSON object.""",
+            }
+        ],
+        system=system_prompt,
+        max_tokens=1024,
+    )
+
+    return response.content
+
+
 async def process_query(user_query: str) -> LLMResult:
     """Process a natural language query and return SQL + visualization config."""
+    settings = get_settings()
+
     if not user_query or len(user_query.strip()) == 0:
         raise LLMError("Query cannot be empty", "INVALID_INPUT", False)
 
-    if len(user_query) > 1000:
-        raise LLMError("Query is too long (max 1000 characters)", "INVALID_INPUT", False)
+    if len(user_query) > settings.max_query_length:
+        raise LLMError(
+            f"Query is too long (max {settings.max_query_length} characters)",
+            "INVALID_INPUT",
+            False,
+        )
 
     response_text = await _call_llm_with_retry(user_query)
     return _parse_response(response_text)
+
+
+async def process_query_with_retry(
+    user_query: str,
+    execute_fn,
+    max_attempts: int = 2,
+) -> tuple[LLMResult, list[dict]]:
+    """
+    Process query with automatic retry on SQL execution failure.
+
+    Args:
+        user_query: The user's natural language query
+        execute_fn: Async function that executes SQL and returns results
+        max_attempts: Maximum number of attempts (default 2)
+
+    Returns:
+        Tuple of (LLMResult, data rows)
+
+    Raises:
+        LLMError or DatabaseError if all attempts fail
+    """
+    from .database import DatabaseError
+
+    settings = get_settings()
+
+    if not user_query or len(user_query.strip()) == 0:
+        raise LLMError("Query cannot be empty", "INVALID_INPUT", False)
+
+    if len(user_query) > settings.max_query_length:
+        raise LLMError(
+            f"Query is too long (max {settings.max_query_length} characters)",
+            "INVALID_INPUT",
+            False,
+        )
+
+    last_error = None
+    last_result = None
+
+    for attempt in range(max_attempts):
+        try:
+            if attempt == 0:
+                # First attempt - normal query
+                response_text = await _call_llm_with_retry(user_query)
+            else:
+                # Retry with error context
+                logger.info(f"Retrying query with error context (attempt {attempt + 1})")
+                response_text = await _call_llm_with_error_context(
+                    user_query,
+                    last_result.sql if last_result else "",
+                    str(last_error),
+                )
+
+            result = _parse_response(response_text)
+            last_result = result
+
+            # Try to execute the SQL
+            data = await execute_fn(result.sql)
+            return result, data
+
+        except DatabaseError as e:
+            last_error = e
+            logger.warning(f"Query attempt {attempt + 1} failed: {e}")
+
+            # If not retryable or last attempt, raise
+            if not e.retryable or attempt == max_attempts - 1:
+                raise
+
+        except LLMError:
+            # LLM errors are not retryable with context
+            raise
+
+    # Should not reach here, but just in case
+    raise last_error or LLMError("Query failed", "UNKNOWN_ERROR", False)

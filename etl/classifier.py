@@ -3,10 +3,15 @@
 import json
 import logging
 import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
-from anthropic import Anthropic
 from supabase import Client
+
+# Add project root to path for shared llm module
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from llm import get_provider
 
 from exceptions import ETLError
 
@@ -77,13 +82,17 @@ class CategoryClassifier:
         self.stats = ClassificationStats()
         self.needs_review: list[dict] = []  # Items flagged for human review
 
-        # Initialize Anthropic client
+        # Initialize LLM provider
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise ETLError("ANTHROPIC_API_KEY must be set for category classification")
 
-        self.anthropic = Anthropic(api_key=api_key)
         self.model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
+        self._provider = get_provider(
+            api_key=api_key,
+            model=self.model,
+            provider=os.environ.get("LLM_PROVIDER", "anthropic"),
+        )
 
     def load_cache(self) -> int:
         """
@@ -331,14 +340,13 @@ Example:
   "Chicken Wings": {{"category": "Appetizers", "confidence": 0.7, "reason": "Could be entree"}}
 }}"""
 
-        response = self.anthropic.messages.create(
-            model=self.model,
-            max_tokens=2048,
+        response = self._provider.complete_sync(
             messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
         )
 
         # Parse response
-        content = response.content[0].text.strip()
+        content = response.content.strip()
 
         # Handle markdown code blocks
         if content.startswith("```"):
@@ -509,13 +517,17 @@ class ProductNameClassifier:
         self._pending: set[str] = set()  # Original names needing classification
         self.stats = ProductNameStats()
 
-        # Initialize Anthropic client
+        # Initialize LLM provider
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise ETLError("ANTHROPIC_API_KEY must be set for product name classification")
 
-        self.anthropic = Anthropic(api_key=api_key)
         self.model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
+        self._provider = get_provider(
+            api_key=api_key,
+            model=self.model,
+            provider=os.environ.get("LLM_PROVIDER", "anthropic"),
+        )
 
     def load_cache(self) -> int:
         """Load existing mappings from database."""
@@ -647,13 +659,12 @@ Example:
   "Churros 12pcs": {{"canonical": "Churros", "confidence": 1.0, "reason": "Stripped qty"}}
 }}"""
 
-        response = self.anthropic.messages.create(
-            model=self.model,
-            max_tokens=4096,
+        response = self._provider.complete_sync(
             messages=[{"role": "user", "content": prompt}],
+            max_tokens=4096,
         )
 
-        content = response.content[0].text.strip()
+        content = response.content.strip()
 
         # Handle markdown code blocks
         if content.startswith("```"):

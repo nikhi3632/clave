@@ -10,7 +10,8 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_anon_key: str
 
-    # Anthropic
+    # LLM Provider
+    llm_provider: str = "anthropic"
     anthropic_api_key: str
     llm_model: str = "claude-sonnet-4-20250514"
 
@@ -19,6 +20,12 @@ class Settings(BaseSettings):
 
     # Server
     debug: bool = False
+
+    # Application domain (for LLM context)
+    app_domain: str = "analytics"
+
+    # Query limits
+    max_query_length: int = 1000
 
     # Timeouts (seconds)
     api_timeout: int = 30

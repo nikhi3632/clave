@@ -1,0 +1,52 @@
+# Git
+.git
+.gitignore
+
+# Node.js (app)
+app/node_modules
+app/.next
+app/dist
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.egg-info
+.venv
+venv
+*.egg
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+**/.env
+**/.env.local
+
+# Logs
+*.log
+**/*.log
+
+# Data files (large)
+data/*.csv
+data/*.json
+
+# Test/cache
+.pytest_cache
+.ruff_cache
+.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+
+# Docs
+*.md
+!README.md
+
+# OS
+.DS_Store
+Thumbs.db

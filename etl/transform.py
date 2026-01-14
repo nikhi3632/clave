@@ -119,7 +119,7 @@ class Transformer:
                 location=raw["location"],
                 channel=raw["channel"],
                 # Financial fields
-                subtotal_cents=raw["subtotal_cents"],
+                sales_cents=raw["sales_cents"],
                 tax_cents=raw["tax_cents"],
                 tip_cents=raw["tip_cents"],
                 delivery_fee_cents=raw.get("delivery_fee_cents", 0),

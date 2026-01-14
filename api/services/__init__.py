@@ -7,7 +7,13 @@ from .database import (
     get_schema_info,
     get_supabase_client,
 )
-from .llm import LLMError, LLMResult, process_query, validate_chart_type
+from .llm import (
+    LLMError,
+    LLMResult,
+    process_query,
+    process_query_with_retry,
+    validate_chart_type,
+)
 
 __all__ = [
     "DatabaseError",
@@ -19,6 +25,7 @@ __all__ = [
     "SchemaInfo",
     "LLMError",
     "process_query",
+    "process_query_with_retry",
     "LLMResult",
     "validate_chart_type",
 ]

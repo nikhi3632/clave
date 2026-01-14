@@ -2,6 +2,15 @@
 
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { ValueFormat, DrillDownFilters, DrillDownConfig } from "@/types";
+import {
+  chartBaseStyles,
+  pieStyles,
+  getTooltipContentStyle,
+  getTooltipItemStyle,
+  getLegendTextStyle,
+  getLabelLineStyle,
+  getClickableStyle,
+} from "@/styles/charts";
 import { CHART_COLORS, getChartColors, createFormatter } from "./chartTheme";
 
 interface PieChartViewProps {
@@ -26,21 +35,18 @@ export function PieChartView({
   const colors = getChartColors(isDark);
   const formatValue = createFormatter(valueFormat);
 
-  // Filter out null/undefined values from pie chart data
   const filteredData = data.filter((item) => {
     const value = item[nameKey];
     return value !== null && value !== undefined && value !== "";
   });
 
-  // Check if drill-down is enabled
   const isDrillDownEnabled = drillDown?.enabled && onDataClick;
 
-  // Build drill-down filters from pie segment using LLM-provided config
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handleSegmentClick = (entry: any) => {
+  const handleSegmentClick = (entry: Record<string, unknown>) => {
     if (!isDrillDownEnabled || !drillDown?.type || !drillDown?.column) return;
 
-    const value = entry[drillDown.column] || entry?.payload?.[drillDown.column] || entry?.name;
+    const payload = entry?.payload as Record<string, unknown> | undefined;
+    const value = entry[drillDown.column] || payload?.[drillDown.column] || entry?.name;
     if (value === null || value === undefined || value === "") return;
 
     const filters: DrillDownFilters = {};
@@ -67,6 +73,12 @@ export function PieChartView({
         break;
     }
 
+    // Include summary SQL for 100% accurate drill-down
+    if (drillDown.summarySQL) {
+      filters.summarySQL = drillDown.summarySQL;
+      filters.summaryLabel = drillDown.summaryLabel;
+    }
+
     if (Object.keys(filters).length > 0) {
       onDataClick(filters);
     }
@@ -81,39 +93,34 @@ export function PieChartView({
           nameKey={nameKey}
           cx="50%"
           cy="50%"
-          innerRadius={60}
-          outerRadius={100}
-          paddingAngle={2}
+          innerRadius={pieStyles.innerRadius}
+          outerRadius={pieStyles.outerRadius}
+          paddingAngle={pieStyles.paddingAngle}
           label={({ name, percent }) => `${name} (${((percent ?? 0) * 100).toFixed(0)}%)`}
-          labelLine={{ stroke: colors.legendText, strokeWidth: 1 }}
-          onClick={(entry) => handleSegmentClick(entry)}
-          style={{ cursor: isDrillDownEnabled ? "pointer" : "default" }}
+          labelLine={getLabelLineStyle(colors)}
+          onClick={(entry) => handleSegmentClick(entry as unknown as Record<string, unknown>)}
+          style={getClickableStyle(!!isDrillDownEnabled)}
         >
           {filteredData.map((_, index) => (
             <Cell
               key={`cell-${index}`}
               fill={CHART_COLORS[index % CHART_COLORS.length]}
-              className={isDrillDownEnabled ? "hover:opacity-80" : ""}
+              className={isDrillDownEnabled ? chartBaseStyles.cellHover : ""}
             />
           ))}
         </Pie>
         <Tooltip
-          formatter={(value) => [formatValue(value as number), dataKey.replace(/_/g, " ")]}
-          contentStyle={{
-            backgroundColor: colors.tooltipBg,
-            border: `1px solid ${colors.tooltipBorder}`,
-            borderRadius: "8px",
-            boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
-          }}
-          labelStyle={{ color: colors.tooltipLabel }}
-          itemStyle={{ color: colors.tooltipLabel }}
+          formatter={(value) => [formatValue(value as number), dataKey.replace(/_cents$/i, "").replace(/_/g, " ")]}
+          contentStyle={getTooltipContentStyle(colors)}
+          labelStyle={getTooltipItemStyle(colors)}
+          itemStyle={getTooltipItemStyle(colors)}
         />
         <Legend
           verticalAlign="bottom"
           height={36}
           iconType="circle"
           formatter={(value) => (
-            <span style={{ color: colors.legendText, fontSize: "14px" }}>{value}</span>
+            <span style={getLegendTextStyle(colors, false)}>{value}</span>
           )}
         />
       </PieChart>
