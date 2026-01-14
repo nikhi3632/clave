@@ -477,17 +477,19 @@ class Loader:
         Returns:
             Number of products deleted.
         """
-        # Find orphan products
-        result = self.client.rpc("execute_readonly_query", {
-            "query_text": """
-                SELECT id FROM products p
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM order_items oi WHERE oi.product_id = p.id
-                )
-            """
-        }).execute()
+        # Get all product IDs
+        all_products = self.client.table("products").select("id").execute()
+        all_ids = {row["id"] for row in (all_products.data or [])}
 
-        orphan_ids = [row["id"] for row in (result.data or [])]
+        if not all_ids:
+            return 0
+
+        # Get all referenced product IDs from order_items
+        referenced = self.client.table("order_items").select("product_id").execute()
+        referenced_ids = {row["product_id"] for row in (referenced.data or [])}
+
+        # Find orphans (products with no order_items)
+        orphan_ids = list(all_ids - referenced_ids)
 
         if not orphan_ids:
             return 0
