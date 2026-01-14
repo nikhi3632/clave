@@ -234,6 +234,23 @@ SELECT
     NOW() as refreshed_at;
 
 -- ============================================================
+-- Payment Summary (by payment type)
+-- ============================================================
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS payment_summary AS
+SELECT
+    o.payment_type,
+    COUNT(*) as order_count,
+    SUM(o.sales_cents) as sales_cents,
+    SUM(o.tax_cents) as tax_cents,
+    SUM(o.tip_cents) as tip_cents,
+    SUM(o.total_cents) as total_cents,
+    ROUND(AVG(o.total_cents))::INTEGER as avg_order_cents
+FROM orders o
+WHERE o.payment_type IS NOT NULL
+GROUP BY o.payment_type;
+
+-- ============================================================
 -- Grants
 -- ============================================================
 
@@ -246,6 +263,7 @@ GRANT ALL ON channel_summary TO service_role;
 GRANT ALL ON source_summary TO service_role;
 GRANT ALL ON location_summary TO service_role;
 GRANT ALL ON reconciliation_totals TO service_role;
+GRANT ALL ON payment_summary TO service_role;
 
 GRANT SELECT ON daily_sales TO anon, authenticated;
 GRANT SELECT ON hourly_sales TO anon, authenticated;
@@ -256,3 +274,4 @@ GRANT SELECT ON channel_summary TO anon, authenticated;
 GRANT SELECT ON source_summary TO anon, authenticated;
 GRANT SELECT ON location_summary TO anon, authenticated;
 GRANT SELECT ON reconciliation_totals TO anon, authenticated;
+GRANT SELECT ON payment_summary TO anon, authenticated;
