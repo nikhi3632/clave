@@ -580,7 +580,9 @@ Column synonyms show alternative terms users might use.
 Views have DIMENSIONS (grouping columns) and METRICS (aggregated values). When user asks for FEWER dimensions than a view has:
 
 1. GROUP BY only the dimension(s) the user requested
-2. Re-aggregate the METRICS: SUM counts/totals, use SUM(total)/SUM(count) for averages
+2. Re-aggregate METRICS correctly:
+   - Counts/totals: use SUM()
+   - Pre-computed averages (columns starting with "avg_"): NEVER use AVG() on these - averaging averages is mathematically wrong. Recalculate as: ROUND(SUM(numerator)::NUMERIC / SUM(denominator))::INTEGER where numerator/denominator are the underlying total and count columns
 3. Never just SELECT a pre-aggregated column without re-grouping - you'll get multiple rows per category
 4. Rule: If view has N dimensions and user wants M < N, you MUST GROUP BY and aggregate
 
