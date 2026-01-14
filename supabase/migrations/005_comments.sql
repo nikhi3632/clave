@@ -89,11 +89,25 @@ METRICS: total_sales_cents, total_units, total_orders, avg_price_cents
 USE FOR: top selling products overall, product rankings, category performance';
 
 COMMENT ON MATERIALIZED VIEW channel_breakdown IS
-'Analytics view for channel and source comparison.
-PURPOSE: Compare performance across order channels and POS sources
+'Analytics view for channel and source comparison by location.
+PURPOSE: Compare performance across order channels and POS sources WITH location breakdown
 DIMENSIONS: location, channel, source
 METRICS: sales_cents, tax_cents, tip_cents, total_cents, order_count, avg_order_cents
-USE FOR: channel comparison, dine-in vs delivery vs pickup, source comparison';
+USE FOR: channel comparison BY LOCATION, source comparison BY LOCATION';
+
+COMMENT ON MATERIALIZED VIEW channel_summary IS
+'Analytics view for channel performance.
+PURPOSE: Compare metrics across order channels (aggregated across all locations/sources)
+DIMENSIONS: channel
+METRICS: sales_cents, tax_cents, tip_cents, total_cents, order_count, avg_order_cents
+USE FOR: sales by channel, AOV by channel, channel comparison, dine-in vs delivery vs pickup';
+
+COMMENT ON MATERIALIZED VIEW source_summary IS
+'Analytics view for POS source performance.
+PURPOSE: Compare metrics across POS systems (aggregated across all locations/channels)
+DIMENSIONS: source
+METRICS: sales_cents, tax_cents, tip_cents, total_cents, order_count, avg_order_cents
+USE FOR: sales by source, AOV by source, AOV by POS, source comparison, toast vs square vs doordash';
 
 COMMENT ON MATERIALIZED VIEW location_summary IS
 'Analytics view for location performance.

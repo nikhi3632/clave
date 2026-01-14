@@ -119,6 +119,38 @@ JOIN locations l ON o.location_id = l.id
 GROUP BY l.name, o.channel, o.source;
 
 -- ============================================================
+-- Channel Summary (aggregated across all locations/sources)
+-- ============================================================
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS channel_summary AS
+SELECT
+    o.channel,
+    COUNT(*) as order_count,
+    SUM(o.sales_cents) as sales_cents,
+    SUM(o.tax_cents) as tax_cents,
+    SUM(o.tip_cents) as tip_cents,
+    SUM(o.total_cents) as total_cents,
+    ROUND(AVG(o.total_cents))::INTEGER as avg_order_cents
+FROM orders o
+GROUP BY o.channel;
+
+-- ============================================================
+-- Source Summary (aggregated across all locations/channels)
+-- ============================================================
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS source_summary AS
+SELECT
+    o.source,
+    COUNT(*) as order_count,
+    SUM(o.sales_cents) as sales_cents,
+    SUM(o.tax_cents) as tax_cents,
+    SUM(o.tip_cents) as tip_cents,
+    SUM(o.total_cents) as total_cents,
+    ROUND(AVG(o.total_cents))::INTEGER as avg_order_cents
+FROM orders o
+GROUP BY o.source;
+
+-- ============================================================
 -- Location Summary (aggregated across all channels/sources)
 -- ============================================================
 
@@ -210,6 +242,8 @@ GRANT ALL ON hourly_sales TO service_role;
 GRANT ALL ON product_performance TO service_role;
 GRANT ALL ON product_summary TO service_role;
 GRANT ALL ON channel_breakdown TO service_role;
+GRANT ALL ON channel_summary TO service_role;
+GRANT ALL ON source_summary TO service_role;
 GRANT ALL ON location_summary TO service_role;
 GRANT ALL ON reconciliation_totals TO service_role;
 
@@ -218,5 +252,7 @@ GRANT SELECT ON hourly_sales TO anon, authenticated;
 GRANT SELECT ON product_performance TO anon, authenticated;
 GRANT SELECT ON product_summary TO anon, authenticated;
 GRANT SELECT ON channel_breakdown TO anon, authenticated;
+GRANT SELECT ON channel_summary TO anon, authenticated;
+GRANT SELECT ON source_summary TO anon, authenticated;
 GRANT SELECT ON location_summary TO anon, authenticated;
 GRANT SELECT ON reconciliation_totals TO anon, authenticated;

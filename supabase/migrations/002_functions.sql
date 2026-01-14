@@ -69,6 +69,8 @@ BEGIN
     REFRESH MATERIALIZED VIEW product_performance;
     REFRESH MATERIALIZED VIEW product_summary;
     REFRESH MATERIALIZED VIEW channel_breakdown;
+    REFRESH MATERIALIZED VIEW channel_summary;
+    REFRESH MATERIALIZED VIEW source_summary;
     REFRESH MATERIALIZED VIEW location_summary;
     REFRESH MATERIALIZED VIEW reconciliation_totals;
 END;
