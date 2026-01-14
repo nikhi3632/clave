@@ -289,13 +289,16 @@ class Transformer:
 
         return updated
 
-    def apply_llm_product_names(self) -> int:
+    def apply_llm_product_names(self, orders: list[Order] | None = None) -> int:
         """
         Apply LLM-normalized product names.
 
         Call this after classify_pending() has been run on the ProductNameClassifier.
         This consolidates products with different original names that map to the same
         canonical name (e.g., "Lg Coke" and "Large Coca-Cola" both become "Coca-Cola").
+
+        Args:
+            orders: List of orders to update with new canonical names.
 
         Returns:
             Number of products consolidated.
@@ -306,6 +309,7 @@ class Transformer:
         # Build mapping: old canonical -> new LLM canonical
         # and consolidate products
         new_products: dict[str, Product] = {}
+        name_mapping: dict[str, str] = {}  # old_canonical -> new_canonical
         consolidated = 0
 
         for old_canonical, product in self.products_seen.items():
@@ -317,6 +321,10 @@ class Transformer:
                 if llm_name and llm_name != orig_name:
                     llm_canonical = llm_name
                     break
+
+            # Track the mapping
+            if llm_canonical != old_canonical:
+                name_mapping[old_canonical] = llm_canonical
 
             if llm_canonical in new_products:
                 # Merge into existing product
@@ -334,6 +342,17 @@ class Transformer:
                 new_products[llm_canonical] = product
 
         self.products_seen = new_products
+
+        # Update OrderItems in all orders with new canonical names
+        if orders and name_mapping:
+            items_updated = 0
+            for order in orders:
+                for item in order.items:
+                    if item.canonical_name in name_mapping:
+                        item.canonical_name = name_mapping[item.canonical_name]
+                        items_updated += 1
+            if items_updated:
+                logger.debug(f"Updated {items_updated} order items with normalized names")
 
         if consolidated:
             logger.info(

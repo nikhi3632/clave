@@ -269,7 +269,7 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
         if not shutdown.should_stop and product_name_classifier:
             try:
                 product_name_classifier.classify_pending()
-                transformer.apply_llm_product_names()
+                transformer.apply_llm_product_names(all_orders)
                 product_name_classifier.save_cache()
             except Exception as e:
                 logger.warning(f"LLM product name normalization failed: {e}")
