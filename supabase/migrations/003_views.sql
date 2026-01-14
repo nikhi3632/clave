@@ -22,7 +22,7 @@ SELECT
     SUM(o.tax_cents) as tax_cents,
     SUM(o.tip_cents) as tip_cents,
     SUM(o.total_cents) as total_cents,
-    ROUND(AVG(o.sales_cents))::INTEGER as avg_order_cents
+    ROUND(AVG(o.total_cents))::INTEGER as avg_order_cents
 FROM orders o
 JOIN locations l ON o.location_id = l.id
 GROUP BY l.name, DATE(o.created_at), o.channel, o.source;
@@ -113,7 +113,7 @@ SELECT
     SUM(o.tax_cents) as tax_cents,
     SUM(o.tip_cents) as tip_cents,
     SUM(o.total_cents) as total_cents,
-    ROUND(AVG(o.sales_cents))::INTEGER as avg_order_cents
+    ROUND(AVG(o.total_cents))::INTEGER as avg_order_cents
 FROM orders o
 JOIN locations l ON o.location_id = l.id
 GROUP BY l.name, o.channel, o.source;
@@ -130,7 +130,7 @@ SELECT
     SUM(o.tax_cents) as tax_cents,
     SUM(o.tip_cents) as tip_cents,
     SUM(o.total_cents) as total_cents,
-    ROUND(AVG(o.sales_cents))::INTEGER as avg_order_cents
+    ROUND(AVG(o.total_cents))::INTEGER as avg_order_cents
 FROM orders o
 JOIN locations l ON o.location_id = l.id
 GROUP BY l.name;

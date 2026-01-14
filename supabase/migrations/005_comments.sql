@@ -139,7 +139,7 @@ COMMENT ON COLUMN daily_sales.order_count IS
 SYNONYMS: orders, order count, number of orders, transactions';
 
 COMMENT ON COLUMN daily_sales.avg_order_cents IS
-'Average order value in cents (based on subtotal).
+'Average order value in cents (total payment including tax and tips).
 SYNONYMS: average order, avg order, AOV, average ticket';
 
 COMMENT ON COLUMN daily_sales.date IS

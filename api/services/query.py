@@ -576,6 +576,14 @@ Column synonyms show alternative terms users might use.
 3. Check that the view has the DIMENSIONS and METRICS you need
 4. Prefer views over base tables for aggregations
 
+### Dimension Aggregation
+Views have DIMENSIONS (grouping columns) and METRICS (aggregated values). When user asks for FEWER dimensions than a view has:
+
+1. GROUP BY only the dimension(s) the user requested
+2. Re-aggregate the METRICS: SUM counts/totals, use SUM(total)/SUM(count) for averages
+3. Never just SELECT a pre-aggregated column without re-grouping - you'll get multiple rows per category
+4. Rule: If view has N dimensions and user wants M < N, you MUST GROUP BY and aggregate
+
 ### Column Selection
 1. Column comments show SYNONYMS - map user terms to actual column names
 2. Look for the column whose synonyms best match what the user asked for
