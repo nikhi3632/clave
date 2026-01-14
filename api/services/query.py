@@ -577,19 +577,21 @@ Column synonyms show alternative terms users might use.
 4. Prefer views over base tables for aggregations
 
 ### Dimension Aggregation
-Views have DIMENSIONS (grouping columns) and METRICS (aggregated values). When user asks for FEWER dimensions than a view has:
+Views have DIMENSIONS (grouping columns) and METRICS (aggregated values).
 
+Key rule: "X by Y" queries should return ONE row per Y value. If Y has 3 distinct values, result must have exactly 3 rows.
+
+When user asks for FEWER dimensions than a view has:
 1. GROUP BY only the dimension(s) the user requested
 2. Re-aggregate METRICS correctly:
    - Counts/totals: use SUM()
    - Pre-computed averages (columns starting with "avg_"): NEVER use AVG() on these - averaging averages is mathematically wrong. Recalculate as: ROUND(SUM(numerator)::NUMERIC / SUM(denominator))::INTEGER where numerator/denominator are the underlying total and count columns
-3. Never just SELECT a pre-aggregated column without re-grouping - you'll get multiple rows per category
-4. Rule: If view has N dimensions and user wants M < N, you MUST GROUP BY and aggregate
+3. Alternative: Query base tables directly (e.g., orders) with simple GROUP BY - often simpler than re-aggregating views
 
 ### Column Selection
 1. Column comments show SYNONYMS - map user terms to actual column names
 2. Look for the column whose synonyms best match what the user asked for
-3. If user says "revenue" or "sales", look for columns with those synonyms
+3. Business concept: AOV/average order/average ticket = what customer pays (total with tax+tips), not net sales
 
 ### Currency
 - Monetary values stored in cents (integers)
