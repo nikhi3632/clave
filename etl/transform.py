@@ -310,71 +310,96 @@ class Transformer:
         Apply LLM-normalized product names.
 
         Call this after classify_pending() has been run on the ProductNameClassifier.
-        This consolidates products with different original names that map to the same
-        canonical name (e.g., "Lg Coke" and "Large Coca-Cola" both become "Coca-Cola").
+        This handles two cases:
+        1. CONSOLIDATE: Different original names map to the same canonical
+           (e.g., "Lg Coke" and "Large Coca-Cola" both become "Coca-Cola")
+        2. SPLIT: Original names in one product map to DIFFERENT canonicals
+           (e.g., "Margarita" and "Margherita Pizza" were wrongly grouped)
 
         Args:
             orders: List of orders to update with new canonical names.
 
         Returns:
-            Number of products consolidated.
+            Number of products affected (consolidated + split).
         """
         if not self.product_name_classifier:
             return 0
 
-        # Build mapping: old canonical -> new LLM canonical
-        # and consolidate products
         new_products: dict[str, Product] = {}
-        name_mapping: dict[str, str] = {}  # old_canonical -> new_canonical
+        # Map original_name -> new_canonical (for order item updates)
+        orig_name_mapping: dict[str, str] = {}
         consolidated = 0
+        split_count = 0
 
         for old_canonical, product in self.products_seen.items():
-            # Get LLM canonical name for this product's original names
-            # Check if any original name maps to a DIFFERENT canonical than current
-            llm_canonical = old_canonical
+            # Group original_names by their LLM canonical name
+            # e.g., {"Margarita": ["Margarita"], "Margherita Pizza": ["Margherita Pizza", "..."]}
+            canonical_groups: dict[str, list[str]] = {}
+
             for orig_name in product.original_names:
                 llm_name = self.product_name_classifier.get_canonical_name(orig_name)
-                # If LLM has a mapping and it differs from current canonical, use it
-                if llm_name is not None and llm_name != old_canonical:
-                    llm_canonical = llm_name
-                    break
+                # If no LLM mapping, default to the current product's canonical
+                target_canonical = llm_name if llm_name is not None else old_canonical
 
-            # Track the mapping
-            if llm_canonical != old_canonical:
-                name_mapping[old_canonical] = llm_canonical
+                if target_canonical not in canonical_groups:
+                    canonical_groups[target_canonical] = []
+                canonical_groups[target_canonical].append(orig_name)
 
-            if llm_canonical in new_products:
-                # Merge into existing product
-                existing = new_products[llm_canonical]
-                for orig in product.original_names:
-                    if orig not in existing.original_names:
-                        existing.original_names.append(orig)
-                # Keep the category if the existing one is None
-                if existing.category is None and product.category:
-                    existing.category = product.category
-                consolidated += 1
-            else:
-                # Update canonical name and add
-                product.canonical_name = llm_canonical
-                new_products[llm_canonical] = product
+            # Track if we're splitting (multiple groups from one product)
+            if len(canonical_groups) > 1:
+                split_count += 1
+                logger.debug(
+                    f"Splitting product '{old_canonical}' into: {list(canonical_groups.keys())}"
+                )
+
+            # Process each group - either merge into existing or create new product
+            for new_canonical, orig_names in canonical_groups.items():
+                # Track mapping for order item updates
+                for orig in orig_names:
+                    if new_canonical != old_canonical:
+                        orig_name_mapping[orig] = new_canonical
+
+                if new_canonical in new_products:
+                    # Merge into existing product
+                    existing = new_products[new_canonical]
+                    for orig in orig_names:
+                        if orig not in existing.original_names:
+                            existing.original_names.append(orig)
+                    # Keep category if existing is None
+                    if existing.category is None and product.category:
+                        existing.category = product.category
+                    consolidated += 1
+                else:
+                    # Create new product for this canonical
+                    new_products[new_canonical] = Product(
+                        canonical_name=new_canonical,
+                        category=product.category,
+                        original_names=list(orig_names),
+                    )
+
+                    # If this is a split (new canonical differs from old), register
+                    # with category classifier so it gets proper classification
+                    if new_canonical != old_canonical and self.category_classifier:
+                        self.category_classifier.get_category(new_canonical, None)
 
         self.products_seen = new_products
 
-        # Update OrderItems in all orders with new canonical names
-        if orders and name_mapping:
+        # Update OrderItems using original name (product_name) to find new canonical
+        if orders and orig_name_mapping:
             items_updated = 0
             for order in orders:
                 for item in order.items:
-                    if item.canonical_name in name_mapping:
-                        item.canonical_name = name_mapping[item.canonical_name]
+                    # Use the item's original product_name to look up correct canonical
+                    if item.product_name in orig_name_mapping:
+                        item.canonical_name = orig_name_mapping[item.product_name]
                         items_updated += 1
             if items_updated:
                 logger.debug(f"Updated {items_updated} order items with normalized names")
 
-        if consolidated:
+        if consolidated or split_count:
             logger.info(
-                f"Consolidated {consolidated} products using LLM normalization "
+                f"LLM normalization: {consolidated} merged, {split_count} split "
                 f"(now {len(new_products)} unique products)"
             )
 
-        return consolidated
+        return consolidated + split_count
