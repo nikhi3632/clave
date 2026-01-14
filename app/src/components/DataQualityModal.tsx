@@ -21,6 +21,7 @@ interface ReconciliationData {
   total_tip_cents: number;
   total_collected_cents: number;
   total_products: number;
+  total_categories: number;
   total_locations: number;
   min_date: string;
   max_date: string;
@@ -142,7 +143,7 @@ export function DataQualityModal({ onClose }: DataQualityModalProps) {
                 </div>
               </div>
 
-              {/* Orders & Products */}
+              {/* Orders, Products & Categories */}
               <div className={styles.statsGrid}>
                 <div className={styles.statCard.container}>
                   <div className={styles.statCard.value}>
@@ -153,6 +154,10 @@ export function DataQualityModal({ onClose }: DataQualityModalProps) {
                 <div className={styles.statCard.container}>
                   <div className={styles.statCard.value}>{data.total_products}</div>
                   <div className={styles.statCard.label}>Products</div>
+                </div>
+                <div className={styles.statCard.container}>
+                  <div className={styles.statCard.value}>{data.total_categories}</div>
+                  <div className={styles.statCard.label}>Categories</div>
                 </div>
               </div>
 

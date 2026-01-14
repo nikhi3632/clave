@@ -153,6 +153,7 @@ SELECT
     (SELECT COALESCE(SUM(tip_cents), 0) FROM orders) as total_tip_cents,
     (SELECT COALESCE(SUM(total_cents), 0) FROM orders) as total_collected_cents,
     (SELECT COUNT(*) FROM products) as total_products,
+    (SELECT COUNT(DISTINCT category) FROM products WHERE category IS NOT NULL) as total_categories,
     (SELECT COUNT(*) FROM locations) as total_locations,
     -- Date range
     (SELECT MIN(created_at)::date FROM orders) as min_date,
