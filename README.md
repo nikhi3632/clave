@@ -38,12 +38,33 @@ A natural language analytics dashboard that consolidates messy restaurant data f
 
 ### Prerequisites
 
-- [Docker & Docker Compose](https://docs.docker.com/get-docker/)
+- [Docker & Docker Compose](https://docs.docker.com/get-docker/) — make sure Docker is running
 - Make (pre-installed on macOS/Linux, [install on Windows](https://gnuwin32.sourceforge.net/packages/make.htm))
+
+### Pre-configured
+
+```bash
+git clone https://github.com/nikhi3632/clave.git
+cd clave
+# Add the .env file (provided separately)
+make up
+```
+
+Then open http://localhost:3000
+
+> The database is already populated with data. Just add the `.env` file and run.
+
+### Full Setup (From Scratch)
+
+<details>
+<summary>Click to expand if setting up your own Supabase instance</summary>
+
+#### Additional Requirements
+
 - A Supabase project ([supabase.com](https://supabase.com))
 - Anthropic API key ([console.anthropic.com](https://console.anthropic.com))
 
-### 1. Clone & Configure
+#### 1. Clone & Configure
 
 ```bash
 git clone https://github.com/nikhi3632/clave.git
@@ -51,7 +72,7 @@ cd clave
 cp .env.example .env
 ```
 
-### 2. Set Up Supabase
+#### 2. Set Up Supabase
 
 1. Create a project at [supabase.com](https://supabase.com)
 2. Get credentials from **Settings > API**:
@@ -60,7 +81,7 @@ cp .env.example .env
    - `service_role` key → `SUPABASE_SERVICE_KEY`
 3. Get connection string from **Settings > Database** → `DATABASE_URL`
 
-### 3. Configure .env
+#### 3. Configure .env
 
 ```bash
 # .env
@@ -71,7 +92,7 @@ DATABASE_URL=postgresql://postgres:password@db.your-project.supabase.co:5432/pos
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-### 4. Run
+#### 4. Run
 
 ```bash
 make setup    # Run database migrations
@@ -79,12 +100,7 @@ docker compose run --rm seed python -m etl   # Run ETL pipeline
 make up       # Start the application
 ```
 
-### 5. Access
-
-- **Dashboard**: http://localhost:3000
-- **API Docs**: http://localhost:8000/docs
-
-### Available Commands
+#### Available Commands
 
 | Command | Description |
 |---------|-------------|
@@ -97,6 +113,13 @@ make up       # Start the application
 | `make logs` | View container logs |
 | `make lint` | Run ESLint (app) + Ruff (api/etl) |
 | `make typecheck` | TypeScript type checking |
+
+</details>
+
+### Access
+
+- **Dashboard**: http://localhost:3000
+- **API Docs**: http://localhost:8000/docs
 
 ---
 
