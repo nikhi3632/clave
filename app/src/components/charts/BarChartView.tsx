@@ -101,7 +101,7 @@ export function BarChartView({
   };
 
   return (
-    <ResponsiveContainer width="100%" height={300}>
+    <ResponsiveContainer width="100%" height={350}>
       <BarChart data={data} margin={chartMargins}>
         <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
         <XAxis
@@ -109,6 +109,10 @@ export function BarChartView({
           tick={getAxisTickStyle(colors)}
           tickLine={getAxisLineStyle(colors)}
           axisLine={getAxisLineStyle(colors)}
+          interval={0}
+          angle={-45}
+          textAnchor="end"
+          height={80}
         />
         <YAxis
           tick={getAxisTickStyle(colors)}

@@ -143,7 +143,7 @@ flowchart TB
 
     subgraph Supabase["🗄️ Supabase (PostgreSQL)"]
         Core["Core Tables<br/>locations │ products │ orders │ order_items"]
-        Views["Materialized Views<br/>daily_sales │ hourly_sales │ product_performance<br/>channel_summary │ source_summary │ location_summary"]
+        Views["Materialized Views<br/>daily_sales │ hourly_sales │ product_performance<br/>channel_summary │ source_summary │ location_summary │ payment_summary"]
         ETLTables["ETL Support Tables<br/>product_name_cache │ product_category_cache<br/>category_review_queue │ category_mappings"]
     end
 
@@ -422,6 +422,7 @@ source_breakdown JSONB  -- {"toast": {...}, "doordash": {...}, "square": {...}}
 | `channel_summary` | channel | order_count, sales, tax, tips, total, avg | AOV by channel, sales by channel |
 | `source_summary` | source | order_count, sales, tax, tips, total, avg | AOV by POS, sales by source |
 | `location_summary` | location | aggregated across all channels | Location comparison |
+| `payment_summary` | payment_type | order_count, sales, tax, tips, total, avg | Payment method breakdown |
 | `reconciliation_totals` | (single row) | totals, source_breakdown (JSONB), quality metrics | Data quality |
 
 ### Data Quality Monitoring
