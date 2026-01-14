@@ -311,6 +311,13 @@ async def get_schema_info() -> SchemaInfo:
         filter_pattern="WHERE channel = :filter_value",
         values=raw.channels,
     )
+    discovered_dimensions["payment_type"] = DimensionInfo(
+        name="payment_type",
+        table="orders",
+        display_column="payment_type",
+        filter_pattern="WHERE payment_type = :filter_value",
+        values=raw.payment_types,
+    )
 
     # ============================================================
     # 2. Parse view metadata and filter out internal views

@@ -116,6 +116,13 @@ DIMENSIONS: location
 METRICS: sales_cents, tax_cents, tip_cents, total_cents, order_count, avg_order_cents
 USE FOR: location comparison, location rankings, sales by location';
 
+COMMENT ON MATERIALIZED VIEW payment_summary IS
+'Analytics view for payment method performance.
+PURPOSE: Compare metrics across payment types (aggregated across all locations/channels)
+DIMENSIONS: payment_type
+METRICS: sales_cents, tax_cents, tip_cents, total_cents, order_count, avg_order_cents
+USE FOR: payment method breakdown, payment type comparison, card vs cash';
+
 -- ============================================================
 -- Internal Views - NOT exposed to LLM
 -- ============================================================
