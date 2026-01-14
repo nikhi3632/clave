@@ -51,7 +51,7 @@ async def _process_query_internal(user_query: str) -> dict:
     schema = await get_schema_info()
 
     # Validate and potentially correct chart type based on actual result shape
-    validated_result = validate_chart_type(data, llm_result, schema)
+    validated_result = validate_chart_type(data, llm_result)
 
     # Build drill-down config for response
     drill_down = None

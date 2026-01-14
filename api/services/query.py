@@ -576,17 +576,11 @@ Column synonyms show alternative terms users might use.
 3. Check that the view has the DIMENSIONS and METRICS you need
 4. Prefer views over base tables for aggregations
 
-### Dimension Aggregation
-Views have DIMENSIONS (grouping columns) and METRICS (aggregated values).
+### Query Intent
+**Default to single values.** Unless the user explicitly requests a breakdown/grouping, return ONE aggregate number.
 
-Key rule: "X by Y" queries should return ONE row per Y value. If Y has 3 distinct values, result must have exactly 3 rows.
-
-When user asks for FEWER dimensions than a view has:
-1. GROUP BY only the dimension(s) the user requested
-2. Re-aggregate METRICS correctly:
-   - Counts/totals: use SUM()
-   - Pre-computed averages (columns starting with "avg_"): NEVER use AVG() on these - averaging averages is mathematically wrong. Recalculate as: ROUND(SUM(numerator)::NUMERIC / SUM(denominator))::INTEGER where numerator/denominator are the underlying total and count columns
-3. Alternative: Query base tables directly (e.g., orders) with simple GROUP BY - often simpler than re-aggregating views
+### Aggregation Rule
+When querying multi-dimension views, ALWAYS use SUM() on metric columns.
 
 ### Column Selection
 1. Column comments show SYNONYMS - map user terms to actual column names
@@ -857,9 +851,7 @@ Return the JSON object with sql, chartType, title, xAxis/yAxis or dataKey/nameKe
 # ============================================================
 
 
-def validate_chart_type(
-    data: list[dict], result: LLMResult, schema: SchemaInfo | None = None
-) -> LLMResult:
+def validate_chart_type(data: list[dict], result: LLMResult) -> LLMResult:
     """
     Validate and potentially correct chart type based on actual result shape.
 
@@ -1096,6 +1088,24 @@ async def process_query_with_retry(
 
             # Try to execute the SQL
             data = await execute_fn(result.sql)
+
+            # Check for duplicate dimension values in bar/pie charts
+            if data and result.chart_type in ("bar", "pie") and len(data) > 1:
+                first_col = list(data[0].keys())[0]
+                values = [row.get(first_col) for row in data]
+                if len(values) != len(set(values)):
+                    # Found duplicates - this indicates missing GROUP BY
+                    duplicates = [v for v in set(values) if values.count(v) > 1]
+                    error_msg = (
+                        f"Result has duplicate values in '{first_col}' column: {duplicates[:3]}. "
+                        f"This usually means missing GROUP BY. "
+                        f"Use GROUP BY {first_col} and SUM() on metric columns."
+                    )
+                    if attempt < max_attempts - 1:
+                        last_error = Exception(error_msg)
+                        logger.warning(f"Duplicate dimension values detected: {error_msg}")
+                        continue  # Retry with error context
+
             return result, data
 
         except DatabaseError as e:
