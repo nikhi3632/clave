@@ -5,6 +5,15 @@ import { supabase } from "@/lib/supabase";
 import { CloseIcon } from "./ui/Icon";
 import { dataQualityModalStyles as styles } from "@/styles/dataQualityModal";
 
+// Dynamic source breakdown - no hardcoded vendor names
+interface SourceStats {
+  orders: number;
+  sales_cents: number;
+  tax_cents: number;
+  tip_cents: number;
+  total_cents: number;
+}
+
 interface ReconciliationData {
   total_orders: number;
   total_sales_cents: number;
@@ -15,24 +24,8 @@ interface ReconciliationData {
   total_locations: number;
   min_date: string;
   max_date: string;
-  // Toast
-  toast_orders: number;
-  toast_sales_cents: number;
-  toast_tax_cents: number;
-  toast_tip_cents: number;
-  toast_total_cents: number;
-  // DoorDash
-  doordash_orders: number;
-  doordash_sales_cents: number;
-  doordash_tax_cents: number;
-  doordash_tip_cents: number;
-  doordash_total_cents: number;
-  // Square
-  square_orders: number;
-  square_sales_cents: number;
-  square_tax_cents: number;
-  square_tip_cents: number;
-  square_total_cents: number;
+  // Dynamic source breakdown as JSONB
+  source_breakdown: Record<string, SourceStats>;
   // Quality
   products_without_category: number;
   error_count: number;
@@ -163,47 +156,26 @@ export function DataQualityModal({ onClose }: DataQualityModalProps) {
                 </div>
               </div>
 
-              {/* Source Breakdown */}
+              {/* Source Breakdown - Dynamic from JSONB */}
               <div>
                 <h3 className={styles.sectionTitle}>Breakdown by Source</h3>
                 <div className={styles.sourceList}>
-                  {[
-                    {
-                      name: "Toast",
-                      orders: data.toast_orders,
-                      sales: data.toast_sales_cents,
-                      tax: data.toast_tax_cents,
-                      tips: data.toast_tip_cents,
-                      total: data.toast_total_cents,
-                    },
-                    {
-                      name: "DoorDash",
-                      orders: data.doordash_orders,
-                      sales: data.doordash_sales_cents,
-                      tax: data.doordash_tax_cents,
-                      tips: data.doordash_tip_cents,
-                      total: data.doordash_total_cents,
-                    },
-                    {
-                      name: "Square",
-                      orders: data.square_orders,
-                      sales: data.square_sales_cents,
-                      tax: data.square_tax_cents,
-                      tips: data.square_tip_cents,
-                      total: data.square_total_cents,
-                    },
-                  ].map((source) => (
-                    <div key={source.name} className={styles.sourceRow}>
-                      <span className={styles.sourceName}>{source.name}</span>
-                      <span className={styles.sourceStats}>
-                        {source.orders} orders · {formatCurrency(source.sales)} sales
-                        {source.tax > 0 && ` + ${formatCurrency(source.tax)} tax`}
-                        {source.tips > 0 && ` + ${formatCurrency(source.tips)} tips`}
-                        {" = "}
-                        {formatCurrency(source.total)}
-                      </span>
-                    </div>
-                  ))}
+                  {Object.entries(data.source_breakdown)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([sourceName, stats]) => (
+                      <div key={sourceName} className={styles.sourceRow}>
+                        <span className={styles.sourceName}>
+                          {sourceName.charAt(0).toUpperCase() + sourceName.slice(1)}
+                        </span>
+                        <span className={styles.sourceStats}>
+                          {stats.orders} orders · {formatCurrency(stats.sales_cents)} sales
+                          {stats.tax_cents > 0 && ` + ${formatCurrency(stats.tax_cents)} tax`}
+                          {stats.tip_cents > 0 && ` + ${formatCurrency(stats.tip_cents)} tips`}
+                          {" = "}
+                          {formatCurrency(stats.total_cents)}
+                        </span>
+                      </div>
+                    ))}
                 </div>
               </div>
 
