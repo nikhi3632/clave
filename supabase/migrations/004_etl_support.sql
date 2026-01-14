@@ -63,6 +63,10 @@ ALTER TABLE product_category_cache ENABLE ROW LEVEL SECURITY;
 ALTER TABLE category_review_queue ENABLE ROW LEVEL SECURITY;
 ALTER TABLE product_name_cache ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Public read access" ON product_category_cache;
+DROP POLICY IF EXISTS "Public read access" ON category_review_queue;
+DROP POLICY IF EXISTS "Public read access" ON product_name_cache;
+
 CREATE POLICY "Public read access" ON product_category_cache FOR SELECT USING (true);
 CREATE POLICY "Public read access" ON category_review_queue FOR SELECT USING (true);
 CREATE POLICY "Public read access" ON product_name_cache FOR SELECT USING (true);
@@ -82,6 +86,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON product_name_cache TO anon, authenticate
 -- ============================================================
 -- Triggers
 -- ============================================================
+
+DROP TRIGGER IF EXISTS update_product_category_cache_updated_at ON product_category_cache;
+DROP TRIGGER IF EXISTS update_product_name_cache_updated_at ON product_name_cache;
 
 CREATE TRIGGER update_product_category_cache_updated_at
     BEFORE UPDATE ON product_category_cache
@@ -109,6 +116,7 @@ CREATE TABLE IF NOT EXISTS category_mappings (
 );
 
 ALTER TABLE category_mappings ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public read access" ON category_mappings;
 CREATE POLICY "Public read access" ON category_mappings FOR SELECT USING (true);
 GRANT ALL ON category_mappings TO service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON category_mappings TO anon, authenticated;
@@ -131,6 +139,7 @@ CREATE TABLE IF NOT EXISTS category_merge_queue (
 );
 
 ALTER TABLE category_merge_queue ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public read access" ON category_merge_queue;
 CREATE POLICY "Public read access" ON category_merge_queue FOR SELECT USING (true);
 GRANT ALL ON category_merge_queue TO service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON category_merge_queue TO anon, authenticated;

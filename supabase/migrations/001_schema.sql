@@ -96,6 +96,11 @@ ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Public read access" ON locations;
+DROP POLICY IF EXISTS "Public read access" ON products;
+DROP POLICY IF EXISTS "Public read access" ON orders;
+DROP POLICY IF EXISTS "Public read access" ON order_items;
+
 CREATE POLICY "Public read access" ON locations FOR SELECT USING (true);
 CREATE POLICY "Public read access" ON products FOR SELECT USING (true);
 CREATE POLICY "Public read access" ON orders FOR SELECT USING (true);
