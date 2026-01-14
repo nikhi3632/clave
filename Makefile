@@ -1,4 +1,4 @@
-.PHONY: help up down build logs clean setup migrate reset review review-stats lint lint-fix typecheck
+.PHONY: help up down build logs clean setup reset review review-stats lint lint-fix typecheck
 .DEFAULT_GOAL := help
 
 help:
@@ -6,12 +6,14 @@ help:
 	@echo "Restaurant Analytics Dashboard"
 	@echo "=============================="
 	@echo ""
+	@echo "Workflow: Push to main triggers CI (migrations + ETL)."
+	@echo "          Use 'make review' locally to review flagged items."
+	@echo ""
 	@echo "Commands:"
 	@echo "  make up           Start all services"
 	@echo "  make down         Stop all services"
-	@echo "  make setup        Run migrations + ETL (first-time setup)"
-	@echo "  make migrate      Run migrations only (no ETL)"
-	@echo "  make reset        Drop all tables and re-run setup"
+	@echo "  make setup        Run migrations (CI handles ETL)"
+	@echo "  make reset        Drop all tables and re-run migrations"
 	@echo "  make review       Interactive category review CLI"
 	@echo "  make review-stats Show category classification stats"
 	@echo "  make build        Rebuild containers"
@@ -26,15 +28,11 @@ up:
 	docker compose up --build
 
 setup:
-	docker compose run --rm seed
-
-migrate:
 	docker compose run --rm seed sh -c 'for f in /supabase/migrations/*.sql; do echo "Applying $$f..."; psql "$$DATABASE_URL" -f "$$f" -q; done'
 
 reset:
 	docker compose build seed
-	docker compose run --rm seed sh -c 'psql "$$DATABASE_URL" -f /supabase/reset.sql -q'
-	docker compose run --rm seed
+	docker compose run --rm seed sh -c 'psql "$$DATABASE_URL" -f /supabase/reset.sql -q && for f in /supabase/migrations/*.sql; do echo "Applying $$f..."; psql "$$DATABASE_URL" -f "$$f" -q; done'
 
 review:
 	docker compose run --rm -it seed python -m review
