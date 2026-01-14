@@ -447,22 +447,24 @@ Example:
             # Skip unprocessed entries (still have hint: prefix)
             if not cat or cat.startswith("hint:"):
                 continue
-                cache_entry = self._cache.get(name.lower(), CategoryResult("", "llm"))
-                # Find source hint if it was stored
-                source_hint = None
-                for item in self.needs_review:
-                    if item["product_name"] == name:
-                        source_hint = item["source_category"]
-                        break
 
-                to_save.append({
-                    "product_name": name,
-                    "category": cat,
-                    "confidence": cache_entry.confidence,
-                    "score": cache_entry.score,
-                    "reason": cache_entry.reason,
-                    "source_category": source_hint,
-                })
+            cache_entry = self._cache.get(name.lower(), CategoryResult("", "llm"))
+
+            # Find source hint if it was stored
+            source_hint = None
+            for item in self.needs_review:
+                if item["product_name"] == name:
+                    source_hint = item["source_category"]
+                    break
+
+            to_save.append({
+                "product_name": name,
+                "category": cat,
+                "confidence": cache_entry.confidence,
+                "score": cache_entry.score,
+                "reason": cache_entry.reason,
+                "source_category": source_hint,
+            })
 
         if not to_save:
             return 0
@@ -522,7 +524,13 @@ Example:
         name_lower = product_name.lower()
         if name_lower in self._cache:
             return self._cache[name_lower].category
-        return self._pending_classifications.get(product_name) or None
+
+        # Check pending classifications, but only return if actually classified
+        # (not still waiting with "hint:" prefix)
+        pending = self._pending_classifications.get(product_name)
+        if pending and not pending.startswith("hint:"):
+            return pending
+        return None
 
 
 # =============================================================================
