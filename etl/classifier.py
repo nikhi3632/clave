@@ -112,6 +112,31 @@ class CategoryClassifier:
         except Exception as e:
             logger.warning(f"Could not load category cache: {e}")
 
+        # IMPORTANT: Also load categories from products table to ensure consistency
+        # Products may have categories (from reviews or manual edits) that aren't in cache
+        try:
+            result = self.client.table("products").select("canonical_name, category").execute()
+            products_added = 0
+
+            for row in result.data or []:
+                canonical = row.get("canonical_name")
+                category = row.get("category")
+                if canonical and category:
+                    name_lower = canonical.lower()
+                    # Only add if not already in cache (cache takes precedence)
+                    if name_lower not in self._cache:
+                        self._cache[name_lower] = CategoryResult(
+                            category=category,
+                            confidence="existing",  # From products table
+                        )
+                        products_added += 1
+
+            if products_added:
+                logger.info(f"Added {products_added} existing product categories to cache")
+
+        except Exception as e:
+            logger.warning(f"Could not load product categories: {e}")
+
         # Load category mappings (user-curated)
         try:
             result = self.client.table("category_mappings").select("*").execute()
@@ -161,10 +186,12 @@ class CategoryClassifier:
         name_lower = product_name.lower()
         self.stats.total += 1
 
-        # Check cache first (from previous runs)
+        # Check cache first (from previous runs OR existing products)
         if name_lower in self._cache:
             self.stats.from_cache += 1
-            return self._cache[name_lower]
+            cached = self._cache[name_lower]
+            # Don't re-queue products that already have categories
+            return cached
 
         # Queue for LLM classification with source hint
         if product_name not in self._pending_classifications:
@@ -452,6 +479,11 @@ Example response format:
                 continue
 
             cache_entry = self._cache.get(name.lower(), CategoryResult("", "llm"))
+
+            # Skip entries that came from products table (confidence="existing")
+            # These are already in the DB, no need to save to cache table
+            if cache_entry.confidence == "existing":
+                continue
 
             # Find source hint if it was stored
             source_hint = None
