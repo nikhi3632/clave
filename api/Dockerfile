@@ -3,11 +3,11 @@ FROM python:3.13-slim
 WORKDIR /app
 
 # Install dependencies
-COPY api/pyproject.toml .
+COPY pyproject.toml .
 RUN pip install --no-cache-dir .
 
 # Copy application code (includes llm/ subdirectory)
-COPY api/ .
+COPY . .
 
 # Expose port
 EXPOSE 8000
