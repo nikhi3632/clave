@@ -4,6 +4,19 @@ A natural language analytics dashboard that consolidates messy restaurant data f
 
 > 🚀 **[Live Demo](https://clave-opal.vercel.app/)** · **[API Docs](https://clave-production-8c73.up.railway.app/docs)**
 
+### Highlights
+
+- **Novel 4-Layer Normalization Pipeline**: LLM cache → fuzzy matching → LLM batch processing → confidence-based classification. Solves the "Margarita vs Margherita Pizza" semantic ambiguity problem that pure fuzzy matching can't handle.
+
+- **Human-in-the-Loop Review System**: Uncertain LLM classifications are flagged for human review, and decisions are preserved forever—subsequent ETL runs never overwrite approved reviews.
+
+- **Self-Healing Query System**: LLM-generated SQL that fails is automatically retried with error context, allowing the system to self-correct invalid column names or syntax errors.
+
+- **Schema-Driven Intelligence**: Database comments contain column synonyms (e.g., "sales" → `sales_cents`), enabling the LLM to understand business terminology without hardcoded mappings.
+
+
+> **Design Philosophy**: Prioritized creative solutions to data challenges and edge cases over over-engineering. The focus is on solving real problems (messy data, semantic ambiguity, LLM uncertainty) rather than adding unnecessary abstractions.
+
 ---
 
 ## Table of Contents
