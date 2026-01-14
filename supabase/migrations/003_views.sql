@@ -143,19 +143,33 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS reconciliation_totals AS
 SELECT
     -- Overall totals (from orders only, no joins that multiply rows)
     (SELECT COUNT(*) FROM orders) as total_orders,
-    (SELECT COALESCE(SUM(total_cents), 0) FROM orders) as total_sales_cents,
+    (SELECT COALESCE(SUM(sales_cents), 0) FROM orders) as total_sales_cents,
+    (SELECT COALESCE(SUM(tax_cents), 0) FROM orders) as total_tax_cents,
+    (SELECT COALESCE(SUM(tip_cents), 0) FROM orders) as total_tip_cents,
+    (SELECT COALESCE(SUM(total_cents), 0) FROM orders) as total_collected_cents,
     (SELECT COUNT(*) FROM products) as total_products,
     (SELECT COUNT(*) FROM locations) as total_locations,
     -- Date range
     (SELECT MIN(created_at)::date FROM orders) as min_date,
     (SELECT MAX(created_at)::date FROM orders) as max_date,
-    -- Breakdown by source
+    -- Toast breakdown
     (SELECT COUNT(*) FROM orders WHERE source = 'toast') as toast_orders,
-    (SELECT COALESCE(SUM(total_cents), 0) FROM orders WHERE source = 'toast') as toast_sales_cents,
+    (SELECT COALESCE(SUM(sales_cents), 0) FROM orders WHERE source = 'toast') as toast_sales_cents,
+    (SELECT COALESCE(SUM(tax_cents), 0) FROM orders WHERE source = 'toast') as toast_tax_cents,
+    (SELECT COALESCE(SUM(tip_cents), 0) FROM orders WHERE source = 'toast') as toast_tip_cents,
+    (SELECT COALESCE(SUM(total_cents), 0) FROM orders WHERE source = 'toast') as toast_total_cents,
+    -- DoorDash breakdown
     (SELECT COUNT(*) FROM orders WHERE source = 'doordash') as doordash_orders,
-    (SELECT COALESCE(SUM(total_cents), 0) FROM orders WHERE source = 'doordash') as doordash_sales_cents,
+    (SELECT COALESCE(SUM(sales_cents), 0) FROM orders WHERE source = 'doordash') as doordash_sales_cents,
+    (SELECT COALESCE(SUM(tax_cents), 0) FROM orders WHERE source = 'doordash') as doordash_tax_cents,
+    (SELECT COALESCE(SUM(tip_cents), 0) FROM orders WHERE source = 'doordash') as doordash_tip_cents,
+    (SELECT COALESCE(SUM(total_cents), 0) FROM orders WHERE source = 'doordash') as doordash_total_cents,
+    -- Square breakdown
     (SELECT COUNT(*) FROM orders WHERE source = 'square') as square_orders,
-    (SELECT COALESCE(SUM(total_cents), 0) FROM orders WHERE source = 'square') as square_sales_cents,
+    (SELECT COALESCE(SUM(sales_cents), 0) FROM orders WHERE source = 'square') as square_sales_cents,
+    (SELECT COALESCE(SUM(tax_cents), 0) FROM orders WHERE source = 'square') as square_tax_cents,
+    (SELECT COALESCE(SUM(tip_cents), 0) FROM orders WHERE source = 'square') as square_tip_cents,
+    (SELECT COALESCE(SUM(total_cents), 0) FROM orders WHERE source = 'square') as square_total_cents,
     -- Data quality
     (SELECT COUNT(*) FROM products WHERE category IS NULL) as products_without_category,
     -- Errors: serious data integrity issues

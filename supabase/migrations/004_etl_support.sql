@@ -2,7 +2,6 @@
 -- ETL Support Tables
 -- ============================================================
 -- Cache tables for LLM-based classification and normalization.
--- Indexes are created in 002_indexes.sql.
 
 -- ============================================================
 -- Product Category Cache
@@ -93,3 +92,45 @@ CREATE TRIGGER update_product_name_cache_updated_at
     BEFORE UPDATE ON product_name_cache
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
+-- Category Mappings
+-- ============================================================
+-- User-curated mappings from source categories to canonical forms.
+-- Populated via `make review`, not hardcoded.
+-- Example: "Beverages" -> "Drinks", "Coffee & Tea" -> "Drinks"
+
+CREATE TABLE IF NOT EXISTS category_mappings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_category TEXT NOT NULL UNIQUE,  -- Original category from POS
+    canonical_category TEXT NOT NULL,       -- User-chosen canonical form
+    created_by TEXT DEFAULT 'review',       -- 'review', 'manual', 'auto'
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE category_mappings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public read access" ON category_mappings FOR SELECT USING (true);
+GRANT ALL ON category_mappings TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON category_mappings TO anon, authenticated;
+
+-- ============================================================
+-- Category Merge Queue
+-- ============================================================
+-- Holds clusters of similar categories for human review.
+-- Separate from product review queue for clarity.
+
+CREATE TABLE IF NOT EXISTS category_merge_queue (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    category_variants TEXT[] NOT NULL,      -- e.g., ['Beverages', 'Drinks', 'Coffee']
+    product_counts INTEGER[] NOT NULL,      -- e.g., [5, 12, 3] - products per variant
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'merged', 'skipped')),
+    canonical_category TEXT,                -- Set when merged
+    reviewed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE category_merge_queue ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public read access" ON category_merge_queue FOR SELECT USING (true);
+GRANT ALL ON category_merge_queue TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON category_merge_queue TO anon, authenticated;

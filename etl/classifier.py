@@ -1,4 +1,4 @@
-"""LLM-based product category classification with caching."""
+"""LLM-based product category classification with caching and mapping."""
 
 import json
 import logging
@@ -11,16 +11,6 @@ from exceptions import ETLError
 from llm_client import get_client
 
 logger = logging.getLogger(__name__)
-
-# Valid categories matching the schema
-VALID_CATEGORIES = [
-    "Appetizers",
-    "Breakfast",
-    "Desserts",
-    "Drinks",
-    "Entrees",
-    "Sides",
-]
 
 # Default model for classification
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
@@ -62,7 +52,13 @@ class ClassificationStats:
 
 
 class CategoryClassifier:
-    """Classify products into categories using LLM with caching."""
+    """Classify products into categories using mappings and LLM with caching.
+
+    Category assignment flow:
+    1. Check if source category has a user-defined mapping -> use mapped category
+    2. Check if source category matches an existing category -> use as-is
+    3. Otherwise queue for LLM classification -> may be flagged for review
+    """
 
     def __init__(self, supabase_client: Client):
         """
@@ -76,6 +72,11 @@ class CategoryClassifier:
         self._pending_classifications: dict[str, str] = {}
         self.stats = ClassificationStats()
         self.needs_review: list[dict] = []  # Items flagged for human review
+
+        # Category mappings (source -> canonical) loaded from DB
+        self._category_mappings: dict[str, str] = {}
+        # Known categories (from products with orders)
+        self._known_categories: set[str] = set()
 
         # Initialize LLM provider
         api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -91,11 +92,12 @@ class CategoryClassifier:
 
     def load_cache(self) -> int:
         """
-        Load existing classifications from database.
+        Load existing classifications, mappings, and known categories from database.
 
         Returns:
             Number of cached entries loaded.
         """
+        # Load product category cache
         try:
             result = self.client.table("product_category_cache").select("*").execute()
 
@@ -106,11 +108,41 @@ class CategoryClassifier:
                 )
 
             logger.info(f"Loaded {len(self._cache)} cached category classifications")
-            return len(self._cache)
 
         except Exception as e:
             logger.warning(f"Could not load category cache: {e}")
-            return 0
+
+        # Load category mappings (user-curated)
+        try:
+            result = self.client.table("category_mappings").select("*").execute()
+
+            for row in result.data or []:
+                self._category_mappings[row["source_category"].lower()] = row[
+                    "canonical_category"
+                ]
+
+            if self._category_mappings:
+                logger.info(f"Loaded {len(self._category_mappings)} category mappings")
+
+        except Exception as e:
+            logger.debug(f"Could not load category mappings: {e}")
+
+        # Load known categories from products that have been ordered (trusted)
+        try:
+            result = self.client.table("products").select("category").execute()
+
+            for row in result.data or []:
+                cat = row.get("category")
+                if cat:
+                    self._known_categories.add(cat)
+
+            if self._known_categories:
+                logger.info(f"Found {len(self._known_categories)} known categories")
+
+        except Exception as e:
+            logger.debug(f"Could not load known categories: {e}")
+
+        return len(self._cache)
 
     def get_category(
         self, product_name: str, source_category: str | None = None
@@ -143,13 +175,19 @@ class CategoryClassifier:
 
     def _normalize_category(self, category: str) -> str | None:
         """
-        Normalize a category string to a valid category.
+        Normalize a category string using mappings and known categories.
+
+        Priority:
+        1. Check user-defined mappings (source -> canonical)
+        2. Check exact match against known categories
+        3. Check case-insensitive match against known categories
+        4. Return cleaned category as-is (new category)
 
         Args:
             category: Raw category string.
 
         Returns:
-            Normalized category or None if invalid.
+            Normalized category or None if empty.
         """
         if not category:
             return None
@@ -157,23 +195,31 @@ class CategoryClassifier:
         # Remove emojis and clean
         import unicodedata
 
-        cleaned = "".join(c for c in category if unicodedata.category(c) not in ("So", "Mn", "Cf"))
+        cleaned = "".join(
+            c for c in category if unicodedata.category(c) not in ("So", "Mn", "Cf")
+        )
         cleaned = cleaned.strip()
 
         if not cleaned:
             return None
 
-        # Check for exact match (case-insensitive)
-        for valid in VALID_CATEGORIES:
-            if cleaned.lower() == valid.lower():
-                return valid
+        cleaned_lower = cleaned.lower()
 
-        # Check for partial match
-        for valid in VALID_CATEGORIES:
-            if valid.lower() in cleaned.lower():
-                return valid
+        # 1. Check user-defined mappings first
+        if cleaned_lower in self._category_mappings:
+            return self._category_mappings[cleaned_lower]
 
-        return None
+        # 2. Check for exact match against known categories
+        if cleaned in self._known_categories:
+            return cleaned
+
+        # 3. Check for case-insensitive match against known categories
+        for known in self._known_categories:
+            if cleaned_lower == known.lower():
+                return known
+
+        # 4. Return title-cased version as a new category
+        return cleaned.title()
 
     def classify_pending(self, batch_size: int = 20) -> int:
         """
@@ -305,27 +351,33 @@ class CategoryClassifier:
             else:
                 products_info.append(name)
 
+        # Build category context from known categories
+        known_list = sorted(self._known_categories) if self._known_categories else []
+        category_guidance = ""
+        if known_list:
+            category_guidance = f"""Known categories in this system (prefer these if applicable):
+{json.dumps(known_list)}
+
+"""
+
         prompt = f"""Classify these restaurant menu items into categories.
 
-Valid categories (use EXACTLY these):
-{json.dumps(VALID_CATEGORIES)}
-
-Products to classify:
+{category_guidance}Products to classify:
 {json.dumps(products_info)}
 
-Rules:
-- Burgers, sandwiches, steaks, pasta, main dishes → Entrees
-- Wings, nachos, dips, small plates → Appetizers
-- Fries, coleslaw, sides → Sides
-- Coffee, soda, beer, wine, cocktails → Drinks
-- Pancakes, eggs, waffles, breakfast items → Breakfast
-- Cake, ice cream, churros, sweet items → Desserts
+Guidelines:
+- Use standard restaurant category names (Entrees, Appetizers, Sides, Drinks, Desserts, Breakfast)
+- If a known category fits, use it exactly
+- Main dishes (burgers, sandwiches, steaks, pasta) → typically "Entrees"
+- Starters (wings, nachos, dips) → typically "Appetizers"
+- Coffee, soda, beer, wine, cocktails → typically "Drinks"
+- Sweet items (cake, ice cream, churros) → typically "Desserts"
 
 NOTE: Some items include "(source says: X)" hints from POS data.
 Use these as context but trust your judgment - the source may be wrong.
 
 Respond with a JSON object. For each product, provide:
-- category: the category name
+- category: the category name (use title case, e.g., "Drinks" not "drinks")
 - confidence: 0.0-1.0 (1.0 = certain, 0.5 = ambiguous/could be multiple)
 - reason: brief explanation, especially if overriding source or uncertain
 
@@ -364,10 +416,10 @@ Example:
                     confidence = 0.8
                     reason = ""
 
-                # Validate category
-                if category not in VALID_CATEGORIES:
-                    normalized = self._normalize_category(category)
-                    category = normalized or "Entrees"
+                # Normalize category (applies mappings and known categories)
+                normalized = self._normalize_category(category)
+                if normalized:
+                    category = normalized
 
                 validated[name] = LLMClassification(
                     category=category,
@@ -389,10 +441,12 @@ Example:
         Returns:
             Number of entries saved.
         """
-        # Get entries that have classifications
+        # Get entries that have classifications (skip unprocessed "hint:" entries)
         to_save = []
         for name, cat in self._pending_classifications.items():
-            if cat:  # Only save if category is set
+            # Skip unprocessed entries (still have hint: prefix)
+            if not cat or cat.startswith("hint:"):
+                continue
                 cache_entry = self._cache.get(name.lower(), CategoryResult("", "llm"))
                 # Find source hint if it was stored
                 source_hint = None

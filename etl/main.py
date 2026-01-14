@@ -11,6 +11,7 @@ from types import FrameType
 
 from dotenv import load_dotenv
 
+from audit import run_category_audit
 from classifier import CategoryClassifier, ProductNameClassifier
 from config import ETLConfig, setup_logging
 from exceptions import ETLError, ExtractionError, LoadError
@@ -314,6 +315,18 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
                 loader.refresh_views()
             except Exception as e:
                 logger.warning(f"Could not refresh views: {e}")
+
+        # Run category audit to find similar categories for merging
+        if not shutdown.should_stop:
+            try:
+                merge_count = run_category_audit(loader.client)
+                if merge_count > 0:
+                    logger.info(
+                        f"Category audit: {merge_count} merge suggestions created. "
+                        f"Run 'make review' to review."
+                    )
+            except Exception as e:
+                logger.warning(f"Could not run category audit: {e}")
 
     except KeyboardInterrupt:
         logger.warning("ETL interrupted by user")

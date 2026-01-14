@@ -16,6 +16,8 @@ DROP MATERIALIZED VIEW IF EXISTS daily_sales CASCADE;
 -- Drop ETL cache tables
 DROP TABLE IF EXISTS product_name_cache CASCADE;
 DROP TABLE IF EXISTS category_review_queue CASCADE;
+DROP TABLE IF EXISTS category_merge_queue CASCADE;
+DROP TABLE IF EXISTS category_mappings CASCADE;
 DROP TABLE IF EXISTS product_category_cache CASCADE;
 
 -- Drop core tables (order matters due to foreign keys)

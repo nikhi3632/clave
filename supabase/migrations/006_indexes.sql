@@ -84,3 +84,14 @@ ON product_name_cache(canonical_name);
 
 CREATE INDEX IF NOT EXISTS idx_product_name_cache_review
 ON product_name_cache(confidence) WHERE confidence = 'llm';
+
+-- Category mappings
+CREATE INDEX IF NOT EXISTS idx_category_mappings_source
+ON category_mappings(source_category);
+
+CREATE INDEX IF NOT EXISTS idx_category_mappings_canonical
+ON category_mappings(canonical_category);
+
+-- Category merge queue
+CREATE INDEX IF NOT EXISTS idx_category_merge_queue_pending
+ON category_merge_queue(status) WHERE status = 'pending';
