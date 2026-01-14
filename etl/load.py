@@ -466,6 +466,38 @@ class Loader:
         self.client.rpc("refresh_analytics_views").execute()
         logger.info("Materialized views refreshed")
 
+    @with_retry()
+    def cleanup_orphan_products(self) -> int:
+        """
+        Delete products that have no order_items.
+
+        This cleans up stale products that were superseded by LLM normalization
+        (e.g., "Lg Coke" superseded by "Coca-Cola").
+
+        Returns:
+            Number of products deleted.
+        """
+        # Find orphan products
+        result = self.client.rpc("execute_readonly_query", {
+            "query_text": """
+                SELECT id FROM products p
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM order_items oi WHERE oi.product_id = p.id
+                )
+            """
+        }).execute()
+
+        orphan_ids = [row["id"] for row in (result.data or [])]
+
+        if not orphan_ids:
+            return 0
+
+        # Delete orphans
+        self.client.table("products").delete().in_("id", orphan_ids).execute()
+
+        logger.info(f"Cleaned up {len(orphan_ids)} orphan products")
+        return len(orphan_ids)
+
     def close(self) -> None:
         """
         Clean up resources and close connections.

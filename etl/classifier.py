@@ -487,10 +487,28 @@ Example:
             return 0
 
     def _save_review_queue(self) -> None:
-        """Save items needing review to the review queue table."""
+        """Save items needing review to the review queue table.
+
+        Only adds new items - never overwrites completed reviews.
+        """
         if not self.needs_review:
             return
 
+        # Get products that have already been reviewed (non-pending)
+        # We don't want to overwrite their decisions
+        try:
+            result = (
+                self.client.table("category_review_queue")
+                .select("product_name")
+                .neq("status", "pending")
+                .execute()
+            )
+            already_reviewed = {row["product_name"] for row in (result.data or [])}
+        except Exception as e:
+            logger.warning(f"Could not check existing reviews: {e}")
+            already_reviewed = set()
+
+        # Filter out already-reviewed products
         to_save = [
             {
                 "product_name": item["product_name"],
@@ -501,13 +519,26 @@ Example:
                 "status": "pending",
             }
             for item in self.needs_review
+            if item["product_name"] not in already_reviewed
         ]
+
+        if not to_save:
+            if already_reviewed:
+                logger.debug(
+                    f"Skipped {len(self.needs_review)} items - already reviewed"
+                )
+            return
+
+        skipped = len(self.needs_review) - len(to_save)
 
         try:
             self.client.table("category_review_queue").upsert(
                 to_save, on_conflict="product_name"
             ).execute()
-            logger.info(f"Saved {len(to_save)} items to review queue")
+            msg = f"Saved {len(to_save)} items to review queue"
+            if skipped:
+                msg += f" (skipped {skipped} already reviewed)"
+            logger.info(msg)
         except Exception as e:
             logger.error(f"Failed to save review queue: {e}")
 

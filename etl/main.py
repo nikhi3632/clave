@@ -144,6 +144,23 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
         logger.error(f"Failed to initialize loader: {e}")
         raise
 
+    # Check for pending reviews and warn
+    try:
+        pending_categories = (
+            loader.client.table("category_review_queue")
+            .select("product_name", count="exact")
+            .eq("status", "pending")
+            .execute()
+        )
+        pending_count = pending_categories.count or 0
+        if pending_count > 0:
+            logger.warning(
+                f"⚠️  {pending_count} category reviews pending! "
+                f"Run 'make review' to review before next ETL run."
+            )
+    except Exception as e:
+        logger.debug(f"Could not check pending reviews: {e}")
+
     try:
         # Extract locations from ALL source files first
         logger.info("Extracting locations from source files...")
@@ -315,6 +332,13 @@ def run_etl(data_dir: Path, config: ETLConfig | None = None) -> dict:
                 loader.refresh_views()
             except Exception as e:
                 logger.warning(f"Could not refresh views: {e}")
+
+        # Clean up orphan products (superseded by LLM normalization)
+        if not shutdown.should_stop:
+            try:
+                loader.cleanup_orphan_products()
+            except Exception as e:
+                logger.warning(f"Could not cleanup orphan products: {e}")
 
         # Run category audit to find similar categories for merging
         if not shutdown.should_stop:
