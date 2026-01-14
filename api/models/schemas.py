@@ -33,6 +33,7 @@ class DrillDownType(str, Enum):
     CATEGORY = "category"
     SOURCE = "source"
     CHANNEL = "channel"
+    PAYMENT_TYPE = "payment_type"
 
 
 class DrillDownConfig(BaseModel):
