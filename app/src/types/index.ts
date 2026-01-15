@@ -1,7 +1,7 @@
 // Chart types
 export type ChartType = "bar" | "line" | "pie" | "table" | "metric" | "info";
 export type ValueFormat = "currency" | "number" | "percent";
-export type DrillDownType = "location" | "date" | "product" | "category" | "source" | "channel";
+export type DrillDownType = "location" | "date" | "product" | "category" | "source" | "channel" | "payment_type";
 
 // Drill-down configuration from LLM
 export interface DrillDownConfig {
