@@ -71,6 +71,9 @@ export function PieChartView({
       case "category":
         filters.category = strValue;
         break;
+      case "payment_type":
+        filters.payment_type = strValue;
+        break;
     }
 
     // Include summary SQL for 100% accurate drill-down
